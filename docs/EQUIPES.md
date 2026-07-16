@@ -7,36 +7,70 @@ O roadmap que a equipe executa está em [`docs/MELHORIAS.md`](MELHORIAS.md).
 
 ## A equipe
 
-| Agente | Papel | Itens do roadmap | Modelo |
-|---|---|---|---|
-| `dados-guardiao` | Persistência, schema, migrações, backup, validação, fuso horário | 1, 2, 3, 13 | sonnet |
-| `ux-mobile` | Formulários, fricção de registro, onboarding, modo escuro, acessibilidade | 6, 7, 13 | sonnet |
-| `graficos-analista` | Gráficos SVG, médias móveis, período, correlação exames×hábitos | 8, 9 | sonnet |
-| `pwa-engenheiro` | Manifest, service worker, offline, fontes locais, notificações | 4, 5 | sonnet |
-| `qa-verificador` | Verificação ponta a ponta pós-implementação; testes Vitest | 12 (+ todos) | sonnet |
-| `revisor-codigo` | Revisão do diff antes do commit (somente leitura) | transversal | opus |
+Os agentes são organizados por **domínio de atuação**, não por item do
+roadmap: qualquer melhoria futura que caia num domínio já tem dono. Os itens
+do `docs/MELHORIAS.md` citados abaixo são os exemplos atuais, não o limite
+do escopo.
 
-O item 10 (importação CSV de relógios) fica com `dados-guardiao` (parsing e
-schema) em parceria com `ux-mobile` (fluxo de importação). O item 11
-(refatoração do `App.jsx`) é do orquestrador — decisão de arquitetura — com
-`qa-verificador` garantindo comportamento idêntico antes/depois.
+### Planejamento e apoio
+
+| Agente | Papel | Modelo | Por quê este modelo |
+|---|---|---|---|
+| `arquiteto` | Planos de mudanças estruturais, evolução de schema, escolha de tecnologia, design de features futuras (só planeja) | **opus** | decisões de arquitetura exigem julgamento; erro aqui custa caro em todo o resto |
+| `explorador` | Localizar código, mapear usos de função/campo, levantar contexto para briefs (somente leitura) | **haiku** | tarefa mecânica de busca; rapidez e custo baixo importam mais que profundidade |
+| `documentador` | Atualizar MELHORIAS.md/EQUIPES.md/CLAUDE.md/README após entregas; textos de ajuda | **haiku** | escrita curta e factual sobre trabalho já verificado |
+
+### Implementação
+
+| Agente | Domínio (atual e futuro) | Exemplos atuais | Modelo | Por quê este modelo |
+|---|---|---|---|---|
+| `dados-guardiao` | Persistência, schema, migrações, backup, validação, datas/fuso | itens 1, 2, 3, 13 | **sonnet** | implementação especializada com regras claras definidas no prompt |
+| `ux-mobile` | Interface, fricção de uso, onboarding, modo escuro, acessibilidade, telas novas | itens 6, 7, 13 | **sonnet** | idem |
+| `graficos-analista` | Gráficos SVG, estatísticas, correlações, projeções, métricas novas | itens 8, 9 | **sonnet** | idem |
+| `pwa-engenheiro` | Manifest, service worker, offline, assets, notificações, build/deploy, performance | itens 4, 5 | **sonnet** | idem |
+| `integracoes` | Sync em nuvem, import CSV de relógios (Strava/Garmin/Polar), APIs externas, autenticação | itens 1 (etapa 3), 10 | **sonnet** | idem |
+
+### Qualidade (etapas obrigatórias do pipeline)
+
+| Agente | Papel | Modelo | Por quê este modelo |
+|---|---|---|---|
+| `qa-verificador` | Verificação ponta a ponta de qualquer entrega; testes Vitest (item 12) | **sonnet** | segue roteiro rigoroso; precisa executar bem, não decidir |
+| `revisor-codigo` | Revisão do diff antes do commit (somente leitura) | **opus** | achar bug sutil em diff é a tarefa de maior exigência de raciocínio da equipe |
+
+O item 11 (refatoração do `App.jsx`) começa no `arquiteto` (plano por
+etapas), é executado pelo agente do domínio de cada módulo extraído e
+fechado pelo `qa-verificador` garantindo comportamento idêntico antes/depois.
+
+### Critério de escolha de modelo (para agentes futuros)
+
+- **haiku** — tarefas mecânicas e de leitura: buscar, listar, resumir,
+  atualizar documentação factual. Otimiza custo e latência.
+- **sonnet** — implementação com escopo definido: o prompt do agente
+  contém as regras do domínio e o modelo executa com qualidade.
+- **opus** — julgamento com consequências: arquitetura, revisão de código,
+  qualquer decisão difícil de reverter.
+- O orquestrador pode sobrescrever o modelo por chamada (parâmetro `model`
+  da ferramenta `Agent`) quando uma tarefa específica exigir mais ou menos
+  capacidade que o padrão do agente.
 
 ## Fluxo de trabalho padrão
 
-Para cada item do roadmap, o orquestrador segue este pipeline:
+Para cada item de trabalho (do roadmap ou pedido novo do usuário), o
+orquestrador segue este pipeline:
 
 ```
-1. PLANEJAR    Ler MELHORIAS.md, escolher o item, definir escopo curto e
-               critério de aceitação observável.
-2. IMPLEMENTAR Delegar ao agente especialista com um brief completo
-               (o agente começa "frio": diga o item, os arquivos, o
+1. PLANEJAR    Definir escopo curto e critério de aceitação observável.
+               Mudança estrutural ou tecnologia nova → arquiteto primeiro.
+               Precisa de contexto do código → explorador (barato).
+2. IMPLEMENTAR Delegar ao agente do domínio com um brief completo
+               (o agente começa "frio": diga o objetivo, os arquivos, o
                critério de aceitação e o que NÃO mudar).
 3. VERIFICAR   Delegar ao qa-verificador. Reprovou → volta ao passo 2
                com o relatório de reprodução.
 4. REVISAR     Delegar ao revisor-codigo com o diff. Achados confirmados
                → volta ao passo 2.
-5. ENTREGAR    Commit no branch da sessão (mensagem em português),
-               push, atualizar o status em MELHORIAS.md.
+5. ENTREGAR    Commit no branch da sessão (mensagem em português), push,
+               e documentador atualiza o status em MELHORIAS.md.
 ```
 
 ### Regras de orquestração
@@ -78,11 +112,13 @@ como system prompt e reproduzir o pipeline acima.
 ## Adicionando agentes futuros
 
 Criar `.claude/agents/<nome>.md` com frontmatter `name`, `description`
-(inclua **quando** usá-lo e os itens do roadmap que cobre), `model` e
-opcionalmente `tools`. Corpo = system prompt do agente. Regras para um bom
-agente novo:
+(inclua **quando** usá-lo), `model` (obrigatório — escolha pelo critério da
+seção acima e justifique na tabela) e opcionalmente `tools` (restrinja a
+leitura para agentes que não devem editar). Corpo = system prompt do agente.
+Regras para um bom agente novo:
 
-- Papel com fronteira clara (o que ele faz e o que ele **não** faz);
+- Domínio com fronteira clara (o que ele faz e o que ele **não** faz),
+  definido para durar além do roadmap atual;
 - Instruções específicas deste projeto, não genéricas — aponte arquivos,
   funções e armadilhas reais;
 - Critério de verificação próprio no final do prompt (todo agente termina

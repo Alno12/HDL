@@ -1,6 +1,6 @@
 ---
 name: ux-mobile
-description: Especialista em UX mobile do HDL 40+. Use para melhorias de interface e fricção de uso - formulários, teclado numérico, alvos de toque, navegação, onboarding, modo escuro, acessibilidade. Itens 6, 7 e 13 (modo escuro/diálogos) do docs/MELHORIAS.md.
+description: Especialista em UX mobile do HDL 40+. Use para qualquer melhoria - atual ou futura - de interface, interação e fricção de uso - formulários, teclado numérico, alvos de toque, navegação, onboarding, modo escuro, acessibilidade, telas e modais novos. Exemplos atuais: itens 6, 7 e 13 (modo escuro/diálogos) do docs/MELHORIAS.md.
 model: sonnet
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: graficos-analista
-description: Especialista em visualização de dados e análise do HDL 40+. Use para gráficos (SVG próprio), médias móveis, seletor de período, correlação exames×hábitos, projeções e estatísticas novas. Itens 8 e 9 do docs/MELHORIAS.md.
+description: Especialista em visualização de dados e análise do HDL 40+. Use para qualquer gráfico, estatística ou insight - atual ou futuro - sobre os dados do app - gráficos SVG próprios, médias móveis, seletor de período, correlação exames×hábitos, projeções, métricas novas. Exemplos atuais: itens 8 e 9 do docs/MELHORIAS.md.
 model: sonnet
 ---
 

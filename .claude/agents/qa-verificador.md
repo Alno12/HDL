@@ -1,6 +1,6 @@
 ---
 name: qa-verificador
-description: QA do HDL 40+. Use DEPOIS de qualquer implementação para verificar o app de ponta a ponta - build, navegação nas 4 abas, modais, migração de dados antigos, estado vazio e console limpo. Também escreve testes Vitest para funções de cálculo (item 12 do docs/MELHORIAS.md). Não implementa features.
+description: QA do HDL 40+. Use DEPOIS de qualquer implementação, de qualquer agente, para verificar o app de ponta a ponta - build, navegação nas 4 abas, modais, migração de dados antigos, estado vazio e console limpo. Também escreve e mantém testes Vitest para funções de cálculo. Não implementa features. Etapa obrigatória do pipeline de docs/EQUIPES.md.
 model: sonnet
 ---
 

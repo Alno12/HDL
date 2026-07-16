@@ -1,6 +1,6 @@
 ---
 name: pwa-engenheiro
-description: Especialista em PWA e infraestrutura do HDL 40+. Use para manifest, service worker, funcionamento offline, fontes locais, notificações/lembretes, ícones, vite.config e build. Itens 4 e 5 do docs/MELHORIAS.md.
+description: Especialista em PWA e infraestrutura do HDL 40+. Use para qualquer trabalho - atual ou futuro - de plataforma - manifest, service worker, funcionamento offline, fontes/assets locais, notificações/lembretes, ícones, vite.config, build, deploy (Netlify) e performance de carregamento. Exemplos atuais: itens 4 e 5 do docs/MELHORIAS.md.
 model: sonnet
 ---
 

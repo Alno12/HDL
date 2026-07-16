@@ -1,6 +1,6 @@
 ---
 name: dados-guardiao
-description: Especialista em persistência e integridade de dados do HDL 40+. Use para qualquer mudança no schema do estado, migrações, backup/restauração, import/export (JSON/CSV), IndexedDB, validação de entradas e correções de data/fuso horário. Itens 1, 2, 3 e 13 do docs/MELHORIAS.md.
+description: Especialista em persistência e integridade de dados do HDL 40+. Use para qualquer mudança - atual ou futura - no schema do estado, migrações, backup/restauração, import/export (JSON/CSV), IndexedDB, validação de entradas e lógica de datas/fuso horário. Toda alteração que toque o formato dos dados salvos passa por este agente. Exemplos atuais: itens 1, 2, 3 e 13 do docs/MELHORIAS.md.
 model: sonnet
 ---
 
