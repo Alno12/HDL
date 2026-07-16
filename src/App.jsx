@@ -26,17 +26,26 @@ const FOODS = [
 
 /* ─────────────────────────  Datas  ─────────────────────────────── */
 
+// Formata um Date como YYYY-MM-DD usando os componentes LOCAIS (nunca UTC).
+// toISOString() converte para UTC e, à noite no Brasil (UTC-3) ou em fusos
+// com offset > +12h (ex.: Kiribati, UTC+14), a data resultante pode cair no
+// dia errado. Usar getFullYear/getMonth/getDate evita isso em qualquer fuso.
+function ymdLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function mondayOf(dateStr) {
+  // "T12:00:00" (meio-dia local, sem "Z") ancora no meio do dia só para
+  // proteger a subtração de DST — a leitura de volta é sempre local (ymdLocal).
   const d = new Date(dateStr + "T12:00:00");
   const off = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - off);
-  return d.toISOString().slice(0, 10);
+  return ymdLocal(d);
 }
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = () => ymdLocal(new Date());
 function addDays(dateStr, n) {
   const d = new Date(dateStr + "T12:00:00");
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return ymdLocal(d);
 }
 const MESES = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
 function weekLabel(monday) {
@@ -206,6 +215,55 @@ function download(name, text, mime) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/* ─────────────────────────  Validação  ──────────────────────────── */
+/* Faixas de sanidade: só avisam (confirm), nunca bloqueiam o registro —
+   o usuário sabe mais que o app. */
+
+const RANGES = {
+  weight: { min: 30, max: 250, label: "Peso", unit: "kg" },
+  restHr: { min: 30, max: 220, label: "FC de repouso", unit: "bpm" },
+  avgHr: { min: 30, max: 220, label: "FC média do treino", unit: "bpm" },
+  minutes: { min: 1, max: 600, label: "Minutos de treino", unit: "min" },
+};
+function confirmRange(key, value) {
+  if (value === "" || value == null) return true;
+  const n = Number(value);
+  if (isNaN(n)) return true;
+  const r = RANGES[key];
+  if (n < r.min || n > r.max) {
+    return confirm(`Valor incomum: ${r.label} de ${n} ${r.unit} está fora da faixa esperada (${r.min}–${r.max} ${r.unit}). Salvar mesmo assim?`);
+  }
+  return true;
+}
+// Último registro de peso com data anterior à "date" informada.
+function lastWeightBefore(vitals, date) {
+  const dates = Object.keys(vitals)
+    .filter((d) => d < date && vitals[d] && vitals[d].weight !== "" && vitals[d].weight != null)
+    .sort();
+  return dates.length ? Number(vitals[dates[dates.length - 1]].weight) : null;
+}
+function confirmWeightJump(vitals, date, value) {
+  if (value === "" || value == null) return true;
+  const n = Number(value);
+  if (isNaN(n)) return true;
+  const last = lastWeightBefore(vitals, date);
+  if (last != null && Math.abs(n - last) > 3) {
+    return confirm(`Peso incomum: ${n} kg difere ${Math.abs(n - last).toFixed(1)} kg do último peso registrado (${last} kg). Salvar mesmo assim?`);
+  }
+  return true;
+}
+function confirmExam(ct, hdl, tg) {
+  if (ct === "" || hdl === "" || tg === "") return true;
+  const c = Number(ct), h = Number(hdl), t = Number(tg);
+  if (!isNaN(h) && !isNaN(c) && h >= c) {
+    if (!confirm(`Valor incomum: HDL (${h}) não pode ser maior ou igual ao colesterol total (${c}). Salvar mesmo assim?`)) return false;
+  }
+  if (!isNaN(t) && t <= 0) {
+    if (!confirm(`Valor incomum: triglicerídeos (${t}) deveria ser maior que zero. Salvar mesmo assim?`)) return false;
+  }
+  return true;
 }
 
 /* ─────────────────────────  UI básicos  ────────────────────────── */
@@ -475,6 +533,8 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [modal, setModal] = useState(null); // {kind, ...payload}
   const saveTimer = useRef(null);
+  const weightFocusRef = useRef(""); // valor ao focar o campo, p/ reverter se o aviso de faixa for recusado
+  const hrFocusRef = useRef("");
 
   useEffect(() => { loadState().then((s) => setState(s || demoState())); }, []);
 
@@ -583,14 +643,27 @@ export default function App() {
         <div style={{ display: "flex", gap: 12 }}>
           <label style={{ flex: 1 }}>
             <span style={{ fontSize: 12, color: C.mute }}>Peso (kg)</span>
-            <input type="number" step="0.1" value={todayVitals.weight}
+            <input type="number" step="0.1" inputMode="decimal" value={todayVitals.weight}
+              onFocus={(e) => { weightFocusRef.current = e.target.value; }}
               onChange={(e) => setVitalVal(today, { weight: e.target.value })}
+              onBlur={(e) => {
+                const val = e.target.value;
+                if (val === "" || val === weightFocusRef.current) return;
+                const ok = confirmRange("weight", val) && confirmWeightJump(state.vitals, today, val);
+                if (!ok) setVitalVal(today, { weight: weightFocusRef.current });
+              }}
               style={{ ...inputStyle, marginTop: 4, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
           </label>
           <label style={{ flex: 1 }}>
             <span style={{ fontSize: 12, color: C.mute }}>FC repouso (bpm)</span>
-            <input type="number" value={todayVitals.restHr}
+            <input type="number" inputMode="numeric" value={todayVitals.restHr}
+              onFocus={(e) => { hrFocusRef.current = e.target.value; }}
               onChange={(e) => setVitalVal(today, { restHr: e.target.value })}
+              onBlur={(e) => {
+                const val = e.target.value;
+                if (val === "" || val === hrFocusRef.current) return;
+                if (!confirmRange("restHr", val)) setVitalVal(today, { restHr: hrFocusRef.current });
+              }}
               style={{ ...inputStyle, marginTop: 4, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
           </label>
         </div>
@@ -789,13 +862,27 @@ export default function App() {
   /* ═══ Modais ═══ */
 
   function TreinoModal({ w }) {
-    const [f, setF] = useState(w ? { ...w } : { date: today, minutes: "", type: "Elíptico", avgHr: "" });
+    const lastType = [...state.workouts].sort((a, b) => (a.date < b.date ? 1 : -1))[0]?.type;
+    const [f, setF] = useState(w ? { ...w } : { date: today, minutes: "", type: lastType || "Elíptico", avgHr: "" });
+    const quickMins = [30, 40, 45, 60];
     return (
       <Modal title={w ? "Editar treino" : "Registrar treino"} onClose={() => setModal(null)}>
-        <Field label="Data"><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={inputStyle} /></Field>
+        <Field label="Data"><input type="date" value={f.date} max={today} onChange={(e) => setF({ ...f, date: e.target.value })} style={inputStyle} /></Field>
         <Field label="Minutos em zona *">
-          <input type="number" autoFocus={!w} value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })}
+          <input type="number" inputMode="numeric" autoFocus={!w} value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })}
             style={{ ...inputStyle, fontFamily: "'Sora', sans-serif", fontSize: 22 }} placeholder="0" />
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            {quickMins.map((m) => (
+              <button key={m} type="button" onClick={() => setF({ ...f, minutes: String(m) })}
+                style={{
+                  flex: 1, minHeight: 44, borderRadius: 10, cursor: "pointer",
+                  fontFamily: "'Sora', sans-serif", fontSize: 15, fontWeight: 600,
+                  border: `1.5px solid ${String(f.minutes) === String(m) ? C.sea : C.line}`,
+                  background: String(f.minutes) === String(m) ? C.seaSoft : "#fff",
+                  color: C.ink, WebkitTapHighlightColor: "transparent",
+                }}>{m}</button>
+            ))}
+          </div>
         </Field>
         <Field label="Tipo">
           <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={inputStyle}>
@@ -803,10 +890,12 @@ export default function App() {
           </select>
         </Field>
         <Field label="FC média (opcional)">
-          <input type="number" value={f.avgHr} onChange={(e) => setF({ ...f, avgHr: e.target.value })} style={inputStyle} placeholder="—" />
+          <input type="number" inputMode="numeric" value={f.avgHr} onChange={(e) => setF({ ...f, avgHr: e.target.value })} style={inputStyle} placeholder="—" />
         </Field>
         <PrimaryBtn onClick={() => {
           if (!f.minutes || Number(f.minutes) <= 0) return;
+          if (!confirmRange("minutes", f.minutes)) return;
+          if (!confirmRange("avgHr", f.avgHr)) return;
           const rec = { ...f, minutes: Number(f.minutes), id: w ? w.id : String(Date.now()) };
           update({ ...state, workouts: w ? state.workouts.map((x) => (x.id === w.id ? rec : x)) : [...state.workouts, rec] });
           setModal(null);
@@ -847,10 +936,14 @@ export default function App() {
   function VitalsModal({ date: initialDate }) {
     const [date, setDate] = useState(initialDate || today);
     const v = state.vitals[date] || { weight: "", restHr: "" };
-    const [f, setF] = useState({ weight: v.weight || "", restHr: v.restHr || "" });
+    const inherited = lastWeightBefore(state.vitals, date);
+    const [f, setF] = useState({ weight: v.weight || (inherited != null ? String(inherited) : ""), restHr: v.restHr || "" });
+    const [weightInherited, setWeightInherited] = useState(!v.weight && inherited != null);
     useEffect(() => {
       const vv = state.vitals[date] || { weight: "", restHr: "" };
-      setF({ weight: vv.weight || "", restHr: vv.restHr || "" });
+      const inh = lastWeightBefore(state.vitals, date);
+      setF({ weight: vv.weight || (inh != null ? String(inh) : ""), restHr: vv.restHr || "" });
+      setWeightInherited(!vv.weight && inh != null);
     }, [date]);
     return (
       <Modal title="Medidas do dia" onClose={() => setModal(null)}>
@@ -859,15 +952,30 @@ export default function App() {
         </Field>
         <div style={{ display: "flex", gap: 10 }}>
           <Field label="Peso (kg)">
-            <input type="number" step="0.1" value={f.weight} onChange={(e) => setF({ ...f, weight: e.target.value })}
+            <input type="number" step="0.1" inputMode="decimal" value={f.weight}
+              onChange={(e) => { setF({ ...f, weight: e.target.value }); setWeightInherited(false); }}
               style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+            {weightInherited && f.weight !== "" && (
+              <div style={{ fontSize: 11, color: C.mute, marginTop: 4 }}>
+                último registro: {String(inherited).replace(".", ",")} kg — edite para gravar hoje
+              </div>
+            )}
           </Field>
           <Field label="FC repouso (bpm)">
-            <input type="number" value={f.restHr} onChange={(e) => setF({ ...f, restHr: e.target.value })}
+            <input type="number" inputMode="numeric" value={f.restHr} onChange={(e) => setF({ ...f, restHr: e.target.value })}
               style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
           </Field>
         </div>
-        <PrimaryBtn onClick={() => { setVitalVal(date, { weight: f.weight, restHr: f.restHr }); setModal(null); }}>Salvar medidas</PrimaryBtn>
+        <PrimaryBtn onClick={() => {
+          // Peso herdado (pré-preenchido) e não editado não é gravado — só o
+          // que o usuário mediu de fato entra na série (achado da revisão).
+          const weightToSave = weightInherited ? (v.weight || "") : f.weight;
+          if (!confirmRange("weight", weightToSave)) return;
+          if (!confirmRange("restHr", f.restHr)) return;
+          if (!weightInherited && !confirmWeightJump(state.vitals, date, f.weight)) return;
+          setVitalVal(date, { weight: weightToSave, restHr: f.restHr });
+          setModal(null);
+        }}>Salvar medidas</PrimaryBtn>
       </Modal>
     );
   }
@@ -877,11 +985,11 @@ export default function App() {
     const ldl = ldlOf(f.ct, f.hdl, f.tg);
     return (
       <Modal title={e ? "Editar exame" : "Novo exame"} onClose={() => setModal(null)}>
-        <Field label="Data"><input type="date" value={f.date} onChange={(ev) => setF({ ...f, date: ev.target.value })} style={inputStyle} /></Field>
+        <Field label="Data"><input type="date" value={f.date} max={today} onChange={(ev) => setF({ ...f, date: ev.target.value })} style={inputStyle} /></Field>
         <div style={{ display: "flex", gap: 10 }}>
           {[["ct", "CT"], ["hdl", "HDL"], ["tg", "TG"]].map(([k, l]) => (
             <Field key={k} label={l}>
-              <input type="number" value={f[k]} onChange={(ev) => setF({ ...f, [k]: ev.target.value })}
+              <input type="number" inputMode="numeric" value={f[k]} onChange={(ev) => setF({ ...f, [k]: ev.target.value })}
                 style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
             </Field>
           ))}
@@ -898,6 +1006,7 @@ export default function App() {
         </Field>
         <PrimaryBtn onClick={() => {
           if (!f.ct || !f.hdl || f.tg === "") return;
+          if (!confirmExam(f.ct, f.hdl, f.tg)) return;
           const rec = { ...f, ct: Number(f.ct), hdl: Number(f.hdl), tg: Number(f.tg), id: e ? e.id : String(Date.now()) };
           update({ ...state, exams: e ? state.exams.map((x) => (x.id === e.id ? rec : x)) : [...state.exams, rec] });
           setModal(null);
@@ -966,7 +1075,7 @@ export default function App() {
         {goalFields.map(([k, l]) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0" }}>
             <span style={{ fontSize: 14, color: C.ink }}>{l}</span>
-            <input type="number" step="0.1" value={g[k]} onChange={(e) => setG({ ...g, [k]: e.target.value })}
+            <input type="number" step="0.1" inputMode={k === "weightGoal" ? "decimal" : "numeric"} value={g[k]} onChange={(e) => setG({ ...g, [k]: e.target.value })}
               style={{ ...inputStyle, width: 88, fontFamily: "'Sora', sans-serif", textAlign: "center" }} />
           </div>
         ))}
