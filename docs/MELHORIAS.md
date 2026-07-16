@@ -170,6 +170,7 @@ nunca deveria mudar sem teste.
 - IDs com `String(Date.now())` podem colidir em importações; usar `crypto.randomUUID()`.
 - Versionar o schema do estado (`{ version: 4, ... }`) para as próximas migrações serem explícitas em vez de heurísticas.
 - Modo escuro (o app é usado de manhã cedo e à noite — exatamente quando a tela clara incomoda).
+- **Meta de alimento zerada causa NaN na adesão:** quando um alimento no ConfigModal tem meta 0, o cálculo de adesão (`pct` na linha 624) resulta em `0/0 = NaN`, que se propaga até o card "Adesão alimentar" da Home exibindo "NaN%". Corrigir impedindo meta 0 ou tratando-a como alimento desativado (excluído da média).
 
 ---
 
