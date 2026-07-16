@@ -29,7 +29,7 @@ existe em um único navegador. É perdido se o usuário:
 São dados de saúde: se houver sincronização em nuvem, documentar claramente
 onde os dados ficam e criptografar em repouso.
 
-### 2. Corrigir o bug de fuso horário na data "de hoje"
+### 2. ✅ Corrigir o bug de fuso horário na data "de hoje" (concluído em 16/07/2026)
 
 `todayStr()` usa `new Date().toISOString()`, que retorna a data em **UTC**.
 No Brasil (UTC−3), a partir das **21h** o app considera que já é o dia
@@ -37,29 +37,32 @@ seguinte: o peso "de hoje" cai no dia errado, o treino da noite vai para
 amanhã e a semana pode virar mais cedo.
 
 ```js
-// hoje (errado à noite no Brasil):
+// antes (errado à noite no Brasil):
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-// correção (data local):
-const todayStr = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// correção aplicada (data local via ymdLocal):
+const ymdLocal = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
 };
+const todayStr = () => ymdLocal(new Date());
 ```
 
-É uma correção pequena com efeito direto na confiabilidade de **todos** os
+Correção pequena mas de efeito direto na confiabilidade de **todos** os
 registros feitos à noite — justamente o horário em que muita gente anota o dia.
 
-### 3. Validação dos dados de entrada
+### 3. ✅ Validação dos dados de entrada (concluído em 16/07/2026)
 
 Hoje os campos aceitam qualquer número: peso de 800 kg, FC de 15 bpm, treino
 com data futura, exame com HDL maior que o colesterol total. Uma digitação
 errada polui os gráficos e as médias por semanas.
 
 - Faixas de sanidade com aviso (não bloqueio): peso 30–250 kg, FC 30–220 bpm, minutos 1–600.
-- `max={today}` no campo de data do treino (os outros modais já têm, o de treino não).
-- Alerta se o novo peso diferir do último em mais de ~3 kg ("confirma esse valor?").
-- Consistência de exame: HDL < CT, TG > 0.
+- `max={today}` em todos os campos de data (treino, medidas, exames).
+- Alerta se o novo peso diferir do último em mais de ~3 kg ("confirma esse valor?" via `confirmWeightJump()`).
+- Consistência de exame: HDL < CT, TG > 0 (validação em `confirmExam()`).
 
 ---
 
@@ -85,14 +88,14 @@ usuário. Sem lembrete, registro diário vira registro esporádico.
 - Notificação local do PWA ("Bom dia! Registre seu peso e FC de repouso").
 - Indicador visível na Home quando o dia ainda está sem medida (ex.: um ponto no card "Medidas de hoje").
 
-### 6. Reduzir a fricção do registro
+### 6. ✅ Reduzir a fricção do registro (concluído em 16/07/2026)
 
 Cada toque a menos aumenta a adesão:
 
 - `inputMode="decimal"` / `inputMode="numeric"` nos campos numéricos — abre o teclado certo no celular (hoje `type="number"` sozinho não garante isso no iOS);
-- pré-preencher o peso com o último valor registrado (normalmente varia pouco);
+- pré-preencher o peso com o último valor registrado via `lastWeightBefore()` (normalmente varia pouco); **importante:** peso herdado (pré-preenchido) não é gravado se o usuário não o editar — decisão de integridade de dados (só mensurações reais entram na série);
 - botões de minutos frequentes no modal de treino (30 / 40 / 45 / 60) além do campo livre;
-- lembrar o último tipo de treino usado em vez de um padrão fixo.
+- lembrar o último tipo de treino usado em vez de um padrão fixo (fallback: "Elíptico").
 
 ### 7. Onboarding: dados de exemplo confundem o uso real
 
@@ -172,7 +175,7 @@ nunca deveria mudar sem teste.
 
 ## Sugestão de sequência
 
-1. **Agora (uma sessão):** fuso horário (#2), validação (#3), teclado numérico e pré-preenchimento (#6).
+1. ✅ **Agora (uma sessão) — concluído em 16/07/2026:** fuso horário (#2), validação (#3), teclado numérico e pré-preenchimento (#6).
 2. **Curto prazo:** PWA + offline (#4), lembrete de backup (#1, etapa 1), onboarding sem dados demo (#7).
 3. **Médio prazo:** gráficos diários com média móvel (#8), resumo por exame (#9), refatoração (#11) + testes (#12).
 4. **Longo prazo:** sincronização em nuvem (#1, etapa 3), importação de CSV do relógio (#10).
