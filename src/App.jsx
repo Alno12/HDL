@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 /* ─────────────────────────  Design tokens  ────────────────────── */
 
@@ -68,6 +68,11 @@ function fmtShort(dateStr) {
 function weekdayShort(dateStr) {
   return new Date(dateStr + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
 }
+// Índice do dia da semana com segunda = 0 ... domingo = 6 (mesma convenção de mondayOf).
+function weekdayMon0(dateStr) {
+  return (new Date(dateStr + "T12:00:00").getDay() + 6) % 7;
+}
+const WEEKDAY_CAP = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"];
 
 /* ─────────────────────────  Estado  ────────────────────────────── */
 
@@ -218,6 +223,30 @@ function lastNWeeks(n) {
 }
 const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
 
+// Sequência atual de dias consecutivos (terminando hoje) em que hasFn(date)
+// é verdadeiro. Mesma tolerância do streak semanal existente: se hoje ainda
+// não tem registro, isso não quebra a sequência de ontem — só pulamos hoje.
+function currentDailyStreak(hasFn, today) {
+  let cursor = hasFn(today) ? today : addDays(today, -1);
+  let streak = 0;
+  while (hasFn(cursor)) {
+    streak++;
+    cursor = addDays(cursor, -1);
+  }
+  return streak;
+}
+// Maior sequência de dias consecutivos já vista em `sortedDates` (datas
+// únicas, ordenadas ascendentemente como string "YYYY-MM-DD").
+function longestDailyStreak(sortedDates) {
+  if (!sortedDates.length) return 0;
+  let best = 1, cur = 1;
+  for (let i = 1; i < sortedDates.length; i++) {
+    cur = addDays(sortedDates[i - 1], 1) === sortedDates[i] ? cur + 1 : 1;
+    if (cur > best) best = cur;
+  }
+  return best;
+}
+
 function download(name, text, mime) {
   const blob = new Blob([text], { type: mime });
   const a = document.createElement("a");
@@ -332,7 +361,12 @@ function Card({ title, right, children }) {
 function SmallBtn({ children, onClick, tone = C.mute }) {
   return (
     <button onClick={onClick}
-      style={{ border: `1px solid ${C.line}`, background: "#fff", color: tone, borderRadius: 8, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+      style={{
+        border: `1px solid ${C.line}`, background: "#fff", color: tone, borderRadius: 10,
+        padding: "11px 14px", minHeight: 44, fontSize: 13, cursor: "pointer", fontWeight: 600,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        WebkitTapHighlightColor: "transparent", touchAction: "manipulation",
+      }}>
       {children}
     </button>
   );
@@ -554,6 +588,105 @@ export default function App() {
     saveTimer.current = setTimeout(() => saveState(next), 300);
   }
 
+  /* Insights de Registros — tudo derivado de workouts/days/vitals,
+     memoizado porque o histórico pode ter 1 ano de dados diários e esse
+     cálculo roda a cada render. Fica ANTES do "if (!state) return" porque
+     hooks não podem ser chamados condicionalmente — o guard de estado
+     nulo vive dentro do próprio callback. */
+  const insights = useMemo(() => {
+    if (!state) return { empty: true };
+    const today = todayStr();
+    const hasAnyData = state.workouts.length > 0 || Object.keys(state.days).length > 0 || Object.keys(state.vitals).length > 0;
+    if (!hasAnyData) return { empty: true };
+
+    // Constância — sequência de peso registrado.
+    const weightDates = Object.keys(state.vitals)
+      .filter((d) => state.vitals[d]?.weight !== "" && state.vitals[d]?.weight != null)
+      .sort();
+    const weightSet = new Set(weightDates);
+    const weightStreak = currentDailyStreak((d) => weightSet.has(d), today);
+    const weightStreakBest = longestDailyStreak(weightDates);
+
+    // % dos últimos 30 dias com pelo menos um registro de qualquer tipo.
+    const workoutDateSet = new Set(state.workouts.map((w) => w.date));
+    const foodDateSet = new Set(
+      Object.entries(state.days).filter(([, v]) => FOODS.some((f) => Number(v[f.key]) > 0)).map(([d]) => d)
+    );
+    const vitalsDateSet = new Set(
+      Object.entries(state.vitals).filter(([, v]) => v.weight || v.restHr).map(([d]) => d)
+    );
+    let daysWithAny = 0;
+    for (let i = 0; i < 30; i++) {
+      const d = addDays(today, -i);
+      if (workoutDateSet.has(d) || foodDateSet.has(d) || vitalsDateSet.has(d)) daysWithAny++;
+    }
+    const pct30 = Math.round((daysWithAny / 30) * 100);
+
+    // Treinos — janela das últimas 12 semanas.
+    const winStart = lastNWeeks(12)[0];
+    const workouts12 = state.workouts.filter((w) => w.date >= winStart && w.date <= today);
+    const typeCounts = {};
+    workouts12.forEach((w) => { typeCounts[w.type || "Outro"] = (typeCounts[w.type || "Outro"] || 0) + 1; });
+    const typeDist = workouts12.length
+      ? Object.entries(typeCounts)
+          .map(([type, n]) => ({ type, n, pct: Math.round((n / workouts12.length) * 100) }))
+          .sort((a, b) => b.n - a.n)
+      : [];
+
+    const weekdayCounts = [0, 0, 0, 0, 0, 0, 0];
+    workouts12.forEach((w) => { weekdayCounts[weekdayMon0(w.date)]++; });
+    const maxWd = Math.max(0, ...weekdayCounts);
+    const bestWd = maxWd > 0 ? weekdayCounts.indexOf(maxWd) : -1;
+
+    const allMinutes = state.workouts.map((w) => Number(w.minutes) || 0).filter((m) => m > 0);
+    const avgDuration = allMinutes.length ? Math.round(mean(allMinutes)) : null;
+    const maxDuration = allMinutes.length ? Math.max(...allMinutes) : null;
+
+    const hrWorkouts = state.workouts.filter((w) => Number(w.avgHr) > 0);
+    const inZone = hrWorkouts.filter((w) => Number(w.avgHr) >= state.goals.zoneLow && Number(w.avgHr) <= state.goals.zoneHigh);
+    const pctZone = hrWorkouts.length ? Math.round((inZone.length / hrWorkouts.length) * 100) : null;
+
+    // Alimentação — melhor/pior adesão nas últimas 4 semanas.
+    const weeks4 = lastNWeeks(4);
+    const adesao4 = FOODS.map((f) => {
+      const totals = weeks4.map((m) => foodWeekTotal(state.days, m, f.key));
+      const avg = mean(totals) || 0;
+      const goal = Number(state.goals[f.key]) || 0;
+      const pct = goal > 0 ? Math.min(100, Math.round((avg / goal) * 100)) : 0;
+      return { ...f, avg, pct };
+    }).sort((a, b) => b.pct - a.pct);
+    const algumaAdesao = adesao4.some((f) => f.avg > 0);
+    const melhorFood = adesao4[0];
+    const piorFood = adesao4[adesao4.length - 1];
+    const foodInsightValido = algumaAdesao && melhorFood.key !== piorFood.key;
+
+    // Sequência diária no alimento de meta semanal mais alta (ex.: azeite).
+    const topGoalFood = [...FOODS].sort((a, b) => (Number(state.goals[b.key]) || 0) - (Number(state.goals[a.key]) || 0))[0];
+    const topFoodSet = new Set(
+      Object.entries(state.days).filter(([, v]) => Number(v[topGoalFood.key]) > 0).map(([d]) => d)
+    );
+    const topFoodStreak = currentDailyStreak((d) => topFoodSet.has(d), today);
+
+    // Medidas — variação de peso nos últimos 30 dias (primeiro vs. último registro).
+    const windowStart = addDays(today, -29);
+    const weightsWindow = weightDates.filter((d) => d >= windowStart && d <= today);
+    const deltaWeight30 = weightsWindow.length >= 2
+      ? Number(state.vitals[weightsWindow[weightsWindow.length - 1]].weight) - Number(state.vitals[weightsWindow[0]].weight)
+      : null;
+
+    return {
+      empty: false,
+      weightStreak, weightStreakBest, pct30,
+      typeDist, workouts12Count: workouts12.length,
+      bestWd, bestWdCount: bestWd >= 0 ? weekdayCounts[bestWd] : 0,
+      avgDuration, maxDuration,
+      pctZone, hrWorkoutsCount: hrWorkouts.length,
+      melhorFood, piorFood, foodInsightValido,
+      topGoalFood, topFoodStreak, topFoodSetSize: topFoodSet.size,
+      deltaWeight30,
+    };
+  }, [state]);
+
   if (!state)
     return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: C.mist, color: C.mute, fontFamily: "'IBM Plex Sans', sans-serif" }}>Carregando…</div>;
 
@@ -737,6 +870,64 @@ export default function App() {
     </>
   );
 
+  /* ═══ Insights de Registros ═══ */
+
+  const InsightsCard = (
+    <Card title="Seus números">
+      {insights.empty ? (
+        <Empty>Registre treinos, alimentação ou medidas para ver seus números aqui.</Empty>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 16 }}>
+            <Stat label="Sequência de peso"
+              value={insights.weightStreak > 0 ? `${insights.weightStreak} dia${insights.weightStreak > 1 ? "s" : ""}` : "—"}
+              sub={insights.weightStreakBest > 0 ? `recorde: ${insights.weightStreakBest} dia${insights.weightStreakBest > 1 ? "s" : ""}` : "registre o peso hoje"}
+              tone={insights.weightStreak >= 7 ? C.sea : undefined} />
+            <Stat label="Constância · 30 dias" value={`${insights.pct30}%`} sub="dias com algum registro"
+              tone={insights.pct30 >= 80 ? C.sea : undefined} />
+            <Stat label="Dia mais treinado" value={insights.bestWd >= 0 ? WEEKDAY_CAP[insights.bestWd] : "—"}
+              sub={insights.bestWd >= 0 ? `${insights.bestWdCount}× nas últimas 12 sem` : "sem treinos ainda"} />
+            <Stat label="Duração média" value={insights.avgDuration != null ? `${insights.avgDuration} min` : "—"} sub="por sessão" />
+            <Stat label="Treino mais longo" value={insights.maxDuration != null ? `${insights.maxDuration} min` : "—"} sub="recorde pessoal" />
+            <Stat label="FC na zona" value={insights.pctZone != null ? `${insights.pctZone}%` : "—"}
+              sub={insights.pctZone != null ? `${insights.hrWorkoutsCount} treino${insights.hrWorkoutsCount > 1 ? "s" : ""} com FC média` : "anote a FC média do treino"}
+              tone={insights.pctZone != null && insights.pctZone >= 70 ? C.sea : undefined} />
+            <Stat label={`Sequência · ${insights.topGoalFood.name.split(" ")[0]}`}
+              value={insights.topFoodSetSize > 0 ? `${insights.topFoodStreak} dia${insights.topFoodStreak !== 1 ? "s" : ""}` : "—"}
+              sub={`${insights.topGoalFood.emoji} dias seguidos com registro`} />
+            <Stat label="Peso · 30 dias"
+              value={insights.deltaWeight30 != null ? `${insights.deltaWeight30 > 0 ? "+" : ""}${insights.deltaWeight30.toFixed(1)} kg` : "—"}
+              sub="primeiro vs. último registro"
+              tone={insights.deltaWeight30 != null && insights.deltaWeight30 < 0 ? C.sea : undefined} />
+          </div>
+
+          {insights.typeDist.length > 0 && (
+            <div style={{ marginBottom: insights.foodInsightValido ? 14 : 0 }}>
+              <div style={{ fontSize: 11, color: C.mute, fontWeight: 600, marginBottom: 8 }}>Treinos por tipo · 12 semanas</div>
+              {insights.typeDist.map((t) => (
+                <div key={t.type} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0" }}>
+                  <span style={{ fontSize: 13, width: 108, color: C.ink, flexShrink: 0 }}>{t.type}</span>
+                  <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.seaSoft, overflow: "hidden" }}>
+                    <div style={{ width: `${t.pct}%`, height: "100%", background: C.sea }} />
+                  </div>
+                  <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 12, color: C.mute, width: 62, textAlign: "right", flexShrink: 0 }}>
+                    {t.n} · {t.pct}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {insights.foodInsightValido && (
+            <div style={{ background: C.mist, borderRadius: 12, padding: "11px 13px", fontSize: 13, color: C.ink }}>
+              {insights.melhorFood.emoji} <b>{insights.melhorFood.name.split(" ")[0]}</b> é seu ponto forte · {insights.piorFood.emoji} <b>{insights.piorFood.name.split(" ")[0]}</b> precisa de atenção
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+
   /* ═══ Registros ═══ */
 
   const workoutsSorted = [...state.workouts].sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -749,6 +940,8 @@ export default function App() {
 
   const Registros = (
     <>
+      {InsightsCard}
+
       <Card title="Adicionar retroativo">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
           {[
@@ -795,7 +988,15 @@ export default function App() {
                 {FOODS.filter((f) => Number(v[f.key]) > 0).map((f) => `${f.emoji}${v[f.key] > 1 ? "×" + v[f.key] : ""}`).join("  ") || "—"}
               </div>
             </div>
-            <SmallBtn onClick={() => setModal({ kind: "dia", date })}>editar</SmallBtn>
+            <div style={{ display: "flex", gap: 6 }}>
+              <SmallBtn onClick={() => setModal({ kind: "dia", date })}>editar</SmallBtn>
+              <SmallBtn tone={C.zone} onClick={() => {
+                if (confirm("Excluir o registro de alimentação deste dia?")) {
+                  const { [date]: _omit, ...rest } = state.days;
+                  update({ ...state, days: rest });
+                }
+              }}>excluir</SmallBtn>
+            </div>
           </div>
         ))}
       </Card>
@@ -812,7 +1013,15 @@ export default function App() {
                 {v.weight ? v.weight + " kg" : "peso —"} · {v.restHr ? "FC " + v.restHr : "FC —"}
               </div>
             </div>
-            <SmallBtn onClick={() => setModal({ kind: "vitals", date })}>editar</SmallBtn>
+            <div style={{ display: "flex", gap: 6 }}>
+              <SmallBtn onClick={() => setModal({ kind: "vitals", date })}>editar</SmallBtn>
+              <SmallBtn tone={C.zone} onClick={() => {
+                if (confirm("Excluir as medidas deste dia?")) {
+                  const { [date]: _omit, ...rest } = state.vitals;
+                  update({ ...state, vitals: rest });
+                }
+              }}>excluir</SmallBtn>
+            </div>
           </div>
         ))}
       </Card>
@@ -944,12 +1153,29 @@ export default function App() {
   }
 
   function VitalsModal({ date: initialDate }) {
-    const [date, setDate] = useState(initialDate || today);
+    const originalDate = initialDate || today;
+    // Só "move" o registro se a data de origem já tinha dados de fato — ao
+    // abrir via "+ Medidas" para uma data vazia, trocar a data é só escolher
+    // onde gravar, sem nada a remover.
+    const hadOriginalData = !!(state.vitals[originalDate] && (state.vitals[originalDate].weight || state.vitals[originalDate].restHr));
+    const [date, setDate] = useState(originalDate);
+    const moving = hadOriginalData && date !== originalDate;
+    const originalRecord = state.vitals[originalDate] || { weight: "", restHr: "" };
     const v = state.vitals[date] || { weight: "", restHr: "" };
-    const inherited = lastWeightBefore(state.vitals, date);
+    // Durante uma movimentação, o hint de "peso herdado" deve refletir a
+    // origem (o que está de fato nos campos), não o destino — evita texto
+    // incoerente enquanto os valores da origem são preservados abaixo.
+    const inherited = moving ? lastWeightBefore(state.vitals, originalDate) : lastWeightBefore(state.vitals, date);
     const [f, setF] = useState({ weight: v.weight || (inherited != null ? String(inherited) : ""), restHr: v.restHr || "" });
     const [weightInherited, setWeightInherited] = useState(!v.weight && inherited != null);
     useEffect(() => {
+      // Durante uma movimentação (hadOriginalData && date !== originalDate),
+      // NÃO recarrega os campos a partir do destino — os valores da origem
+      // (ou já editados pelo usuário) precisam permanecer para serem
+      // gravados lá. Recarregar aqui era a causa da perda de dados
+      // encontrada pelo QA: os campos passavam a exibir e a salvar os
+      // valores do DESTINO, apagando os da origem ao mover.
+      if (moving) return;
       const vv = state.vitals[date] || { weight: "", restHr: "" };
       const inh = lastWeightBefore(state.vitals, date);
       setF({ weight: vv.weight || (inh != null ? String(inh) : ""), restHr: vv.restHr || "" });
@@ -979,11 +1205,30 @@ export default function App() {
         <PrimaryBtn onClick={() => {
           // Peso herdado (pré-preenchido) e não editado não é gravado — só o
           // que o usuário mediu de fato entra na série (achado da revisão).
-          const weightToSave = weightInherited ? (v.weight || "") : f.weight;
+          // Ao mover, o "já salvo" de referência é o da ORIGEM (originalRecord),
+          // não o do destino — evita reintroduzir a perda/mistura de dados.
+          const weightFallback = moving ? (originalRecord.weight || "") : (v.weight || "");
+          const weightToSave = weightInherited ? weightFallback : f.weight;
           if (!confirmRange("weight", weightToSave)) return;
           if (!confirmRange("restHr", f.restHr)) return;
           if (!weightInherited && !confirmWeightJump(state.vitals, date, f.weight)) return;
-          setVitalVal(date, { weight: weightToSave, restHr: f.restHr });
+
+          // Se a data foi trocada e a origem tinha registro, isso é uma
+          // MOVIMENTAÇÃO: grava no destino os valores atualmente nos campos
+          // (preservados da origem pelo useEffect acima, ou já editados pelo
+          // usuário) e remove a origem na mesma atualização de estado, para
+          // nunca duplicar nem perder o dado.
+          if (moving) {
+            const dest = state.vitals[date];
+            const destHasData = !!(dest && (dest.weight || dest.restHr));
+            if (destHasData && !confirm(`Já existe registro em ${fmtBR(date)}. Substituir?`)) return;
+            const nextVitals = { ...state.vitals };
+            delete nextVitals[originalDate];
+            nextVitals[date] = { weight: weightToSave, restHr: f.restHr };
+            update({ ...state, vitals: nextVitals });
+          } else {
+            setVitalVal(date, { weight: weightToSave, restHr: f.restHr });
+          }
           setModal(null);
         }}>Salvar medidas</PrimaryBtn>
       </Modal>
