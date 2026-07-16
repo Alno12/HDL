@@ -22,6 +22,7 @@ const FOODS = [
   { key: "nuts", emoji: "🥜", name: "Castanhas", portion: "1 punhado (~30g)" },
   { key: "oats", emoji: "🌾", name: "Aveia", portion: "3–4 col. de sopa (30–40g)" },
   { key: "olive", emoji: "🫒", name: "Azeite extravirgem", portion: "1 col. de sopa, de preferência cru" },
+  { key: "avocado", emoji: "🥑", name: "Abacate", portion: "1/2 abacate ou 1 avocado (~100g)" },
 ];
 
 /* ─────────────────────────  Datas  ─────────────────────────────── */
@@ -72,7 +73,7 @@ function weekdayShort(dateStr) {
 
 const defaultGoals = {
   minWeek: 140, zoneLow: 130, zoneHigh: 155,
-  fish: 2, nuts: 5, oats: 5, olive: 7,
+  fish: 2, nuts: 5, oats: 5, olive: 7, avocado: 4,
   weightGoal: 75, hdlGoal: 40,
 };
 
@@ -112,6 +113,7 @@ function demoState() {
         nuts: d < 4 + (i % 2) ? 1 : 0,
         oats: d < 4 + Math.floor(i / 6) ? 1 : 0,
         olive: d < 5 + (i % 3 === 0 ? 1 : 0) ? 1 : 0,
+        avocado: (d === 1 || d === 4 || (d === 6 && i % 2 === 1)) ? 1 : 0,
       };
       vitals[addDays(mon, d)] = {
         weight: Math.round((wt[i] + (d - 3) * 0.03) * 10) / 10,
@@ -126,6 +128,7 @@ function demoState() {
       nuts: d <= wd ? 1 : 0,
       oats: d % 2 === 0 || d === wd ? 1 : 0,
       olive: 1,
+      avocado: d === 1 || d === 4 ? 1 : 0,
     };
     vitals[addDays(thisMon, d)] = {
       weight: Math.round((78.1 - d * 0.02) * 10) / 10,
@@ -149,15 +152,22 @@ function demoState() {
 /* Usa localStorage do navegador — os dados ficam só no seu dispositivo. */
 
 function migrateState(s) {
-  if (!s || s.vitals) return s;
-  const vitals = {};
-  if (s.weeks) {
-    for (const [mon, w] of Object.entries(s.weeks)) {
-      if (w && (w.weight || w.restHr)) vitals[mon] = { weight: w.weight || "", restHr: w.restHr || "" };
+  if (!s) return s;
+  let out = s;
+  if (!s.vitals) {
+    const vitals = {};
+    if (s.weeks) {
+      for (const [mon, w] of Object.entries(s.weeks)) {
+        if (w && (w.weight || w.restHr)) vitals[mon] = { weight: w.weight || "", restHr: w.restHr || "" };
+      }
     }
+    const { weeks, ...rest } = s;
+    out = { ...rest, vitals };
   }
-  const { weeks, ...rest } = s;
-  return { ...rest, vitals };
+  // Backfill de metas ausentes (ex.: alimento novo adicionado depois que o
+  // backup foi salvo) a partir de defaultGoals, sem sobrescrever metas já
+  // personalizadas pelo usuário.
+  return { ...out, goals: { ...defaultGoals, ...out.goals } };
 }
 async function loadState() {
   try {
@@ -556,7 +566,7 @@ export default function App() {
     update({ ...state, vitals: { ...state.vitals, [date]: { ...(state.vitals[date] || {}), ...patch } } });
   }
   function setFoodDay(date, key, val) {
-    const d = state.days[date] || { fish: 0, nuts: 0, oats: 0, olive: 0 };
+    const d = state.days[date] || { fish: 0, nuts: 0, oats: 0, olive: 0, avocado: 0 };
     update({ ...state, days: { ...state.days, [date]: { ...d, [key]: val } } });
   }
 
@@ -683,7 +693,7 @@ export default function App() {
           <Stat label="Sequência atual" value={streak > 0 ? `${streak} sem` : "—"} sub="semanas seguidas na meta" />
           <Stat label="Recorde semanal" value={`${record} min`} sub="melhor semana do período" />
           <Stat label="Total no mês" value={`${totalMonth} min`} sub={`${monthWk.length} treinos em ${MESES[Number(curMonth.slice(5)) - 1]}`} />
-          <Stat label="Adesão alimentar" value={`${adesaoGeral}%`} sub="média 4 sem, 4 alimentos" tone={adesaoGeral >= 80 ? C.sea : undefined} />
+          <Stat label="Adesão alimentar" value={`${adesaoGeral}%`} sub={`média 4 sem, ${FOODS.length} alimentos`} tone={adesaoGeral >= 80 ? C.sea : undefined} />
           <Stat label="Δ FC repouso" value={fmtDelta(dRest, "bpm")} sub="4 sem vs 4 anteriores" tone={dRest != null && dRest < 0 ? C.sea : undefined} />
           <Stat label="Δ Peso" value={fmtDelta(dWt, "kg")} sub="4 sem vs 4 anteriores" tone={dWt != null && dWt < 0 ? C.sea : undefined} />
         </div>
@@ -906,7 +916,7 @@ export default function App() {
 
   function DiaModal({ date: initialDate }) {
     const [date, setDate] = useState(initialDate || today);
-    const d = state.days[date] || { fish: 0, nuts: 0, oats: 0, olive: 0 };
+    const d = state.days[date] || { fish: 0, nuts: 0, oats: 0, olive: 0, avocado: 0 };
     const btn = { width: 38, height: 38, borderRadius: 11, fontSize: 20, cursor: "pointer", fontFamily: "'Sora', sans-serif", fontWeight: 600, border: `1.5px solid ${C.line}`, background: "#fff", color: C.ink };
     return (
       <Modal title="Alimentação do dia" onClose={() => setModal(null)}>
@@ -1023,7 +1033,7 @@ export default function App() {
     function exportCSV() {
       const t = ["data,minutos,tipo,fc_media", ...state.workouts.map((w) => `${w.date},${w.minutes},${w.type},${w.avgHr || ""}`)].join("\n");
       const e = ["data,ct,hdl,tg,ldl,nota", ...state.exams.map((x) => `${x.date},${x.ct},${x.hdl},${x.tg},${ldlOf(x.ct, x.hdl, x.tg) ?? ""},"${x.note || ""}"`)].join("\n");
-      const d = ["data,peixe,castanhas,aveia,azeite", ...Object.entries(state.days).sort().map(([k, v]) => `${k},${v.fish || 0},${v.nuts || 0},${v.oats || 0},${v.olive || 0}`)].join("\n");
+      const d = ["data,peixe,castanhas,aveia,azeite,abacate", ...Object.entries(state.days).sort().map(([k, v]) => `${k},${v.fish || 0},${v.nuts || 0},${v.oats || 0},${v.olive || 0},${v.avocado || 0}`)].join("\n");
       const s = ["data,peso,fc_repouso", ...Object.entries(state.vitals).sort().map(([k, w]) => `${k},${w.weight || ""},${w.restHr || ""}`)].join("\n");
       download("treinos.csv", t, "text/csv");
       download("exames.csv", e, "text/csv");
@@ -1055,8 +1065,12 @@ export default function App() {
       const r = new FileReader();
       r.onload = () => {
         try {
-          const parsed = migrateState(JSON.parse(r.result));
-          if (parsed.goals && parsed.exams) { update(parsed); setModal(null); }
+          // Valida a estrutura ANTES da migração: migrateState preenche
+          // goals com defaults, o que mascararia um arquivo malformado.
+          const raw = JSON.parse(r.result);
+          const valido = raw && raw.goals && Array.isArray(raw.exams) &&
+            Array.isArray(raw.workouts) && typeof raw.days === "object";
+          if (valido) { update(migrateState(raw)); setModal(null); }
           else alert("Arquivo não reconhecido como backup do app.");
         } catch { alert("Não foi possível ler o arquivo. Confira se é o backup JSON."); }
       };
@@ -1066,7 +1080,8 @@ export default function App() {
     const goalFields = [
       ["minWeek", "Minutos em zona / semana"], ["zoneLow", "Zona FC — mínimo (bpm)"], ["zoneHigh", "Zona FC — máximo (bpm)"],
       ["fish", "Peixe (porções/semana)"], ["nuts", "Castanhas (porções/semana)"], ["oats", "Aveia (porções/semana)"],
-      ["olive", "Azeite (dias/semana)"], ["weightGoal", "Meta de peso (kg)"], ["hdlGoal", "Meta de HDL (mg/dL)"],
+      ["olive", "Azeite (dias/semana)"], ["avocado", "Abacate (porções/semana)"],
+      ["weightGoal", "Meta de peso (kg)"], ["hdlGoal", "Meta de HDL (mg/dL)"],
     ];
 
     return (
@@ -1112,6 +1127,37 @@ export default function App() {
 
   /* ═══ Layout ═══ */
 
+  const NAV_ICONS = {
+    home: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3 11.5 12 4l9 7.5" />
+        <path d="M5.5 10.5V19a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-8.5" />
+        <path d="M9.5 20v-6h5v6" />
+      </svg>
+    ),
+    trends: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="4 16 10 10 14 13 20 6" />
+        <polyline points="14 6 20 6 20 12" />
+      </svg>
+    ),
+    log: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <line x1="9" y1="6" x2="20" y2="6" />
+        <line x1="9" y1="12" x2="20" y2="12" />
+        <line x1="9" y1="18" x2="20" y2="18" />
+        <circle cx="4.5" cy="6" r="1.3" fill="currentColor" stroke="none" />
+        <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
+        <circle cx="4.5" cy="18" r="1.3" fill="currentColor" stroke="none" />
+      </svg>
+    ),
+    exams: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M12 3.5s6.5 7.7 6.5 12.3a6.5 6.5 0 0 1-13 0C5.5 11.2 12 3.5 12 3.5Z" />
+      </svg>
+    ),
+  };
+
   const tabs = [["home", "Home"], ["trends", "Tendências"], ["log", "Registros"], ["exams", "Exames"]];
 
   return (
@@ -1120,6 +1166,8 @@ export default function App() {
         @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
         button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid ${C.sea}; outline-offset: 2px; }
         @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+        .nav-btn { transition: filter .1s ease, transform .1s ease; }
+        .nav-btn:active { filter: brightness(0.93); transform: scale(0.96); }
       `}</style>
 
       <header style={{ maxWidth: 480, margin: "0 auto", padding: "18px 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1131,26 +1179,35 @@ export default function App() {
           style={{ border: `1.5px solid ${C.line}`, background: "#fff", borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: "pointer" }}>⚙</button>
       </header>
 
-      <main style={{ maxWidth: 480, margin: "0 auto", padding: "10px 16px calc(104px + env(safe-area-inset-bottom))" }}>
+      <main style={{ maxWidth: 480, margin: "0 auto", padding: "10px 16px calc(110px + env(safe-area-inset-bottom))" }}>
         {tab === "home" && Home}
         {tab === "trends" && Trends}
         {tab === "log" && Registros}
         {tab === "exams" && Exams}
       </main>
 
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}`, paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}` }}>
         <div style={{ maxWidth: 480, margin: "0 auto", display: "flex" }}>
           {tabs.map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)}
+            <button key={id} onClick={() => setTab(id)} className="nav-btn"
+              aria-current={tab === id ? "page" : undefined}
+              aria-label={label}
               style={{
-                flex: 1, minHeight: 60, padding: "16px 4px", border: "none", cursor: "pointer",
-                background: tab === id ? C.seaSoft : "none",
-                fontFamily: "'Sora', sans-serif", fontSize: 13.5,
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                gap: 4, border: "none", cursor: "pointer", boxSizing: "border-box",
+                paddingTop: 12, paddingLeft: 4, paddingRight: 4,
+                paddingBottom: "calc(12px + env(safe-area-inset-bottom))",
+                background: tab === id ? C.seaSoft : "transparent",
+                fontFamily: "'Sora', sans-serif", fontSize: 11,
                 fontWeight: tab === id ? 700 : 500,
                 color: tab === id ? C.ink : C.mute,
                 borderTop: tab === id ? `3px solid ${C.sea}` : "3px solid transparent",
+                touchAction: "manipulation",
                 WebkitTapHighlightColor: "transparent",
-              }}>{label}</button>
+              }}>
+              {NAV_ICONS[id]}
+              <span>{label}</span>
+            </button>
           ))}
         </div>
       </nav>
