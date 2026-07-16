@@ -68,13 +68,12 @@ const defaultGoals = {
 };
 
 function emptyState() {
-  const wk = mondayOf(todayStr());
   return {
     goals: { ...defaultGoals },
     workouts: [],
     exams: [{ id: "e1", date: "2026-07-15", ct: 155, hdl: 39, tg: 97, note: "Início do plano" }],
     days: {},
-    weeks: { [wk]: { weight: "", restHr: 63 } },
+    vitals: {},
   };
 }
 
@@ -82,7 +81,7 @@ function demoState() {
   const thisMon = mondayOf(todayStr());
   const workouts = [];
   const days = {};
-  const weeks = {};
+  const vitals = {};
   const mins = [55, 70, 80, 95, 90, 110, 105, 125, 120, 135, 130, 145];
   const rest = [67, 66, 66, 65, 65, 64, 63, 63, 62, 62, 61, 61];
   const wt =  [79.8, 79.6, 79.4, 79.2, 79.0, 78.9, 78.7, 78.6, 78.4, 78.3, 78.2, 78.1];
@@ -105,8 +104,11 @@ function demoState() {
         oats: d < 4 + Math.floor(i / 6) ? 1 : 0,
         olive: d < 5 + (i % 3 === 0 ? 1 : 0) ? 1 : 0,
       };
+      vitals[addDays(mon, d)] = {
+        weight: Math.round((wt[i] + (d - 3) * 0.03) * 10) / 10,
+        restHr: rest[i] + (d % 3 === 0 ? -1 : d % 3 === 1 ? 1 : 0),
+      };
     }
-    weeks[mon] = { weight: wt[i], restHr: rest[i] };
   }
   const wd = (new Date().getDay() + 6) % 7;
   for (let d = 0; d <= wd; d++) {
@@ -116,13 +118,16 @@ function demoState() {
       oats: d % 2 === 0 || d === wd ? 1 : 0,
       olive: 1,
     };
+    vitals[addDays(thisMon, d)] = {
+      weight: Math.round((78.1 - d * 0.02) * 10) / 10,
+      restHr: 61 - (d % 2),
+    };
   }
   workouts.push({ id: "cw1", date: addDays(thisMon, Math.max(0, wd - 2)), minutes: 48, type: "Corrida", avgHr: 144 });
   if (wd >= 2) workouts.push({ id: "cw2", date: addDays(thisMon, wd - 1), minutes: 42, type: "Bike", avgHr: 139 });
-  weeks[thisMon] = { weight: 78.1, restHr: 61 };
   return {
     goals: { ...defaultGoals },
-    workouts, days, weeks,
+    workouts, days, vitals,
     exams: [
       { id: "e0", date: "2026-01-20", ct: 162, hdl: 35, tg: 118, note: "Antes de começar" },
       { id: "e05", date: "2026-04-14", ct: 158, hdl: 37, tg: 104, note: "3 meses de caminhada" },
@@ -134,10 +139,21 @@ function demoState() {
 /* ─────────────────────────  Persistência  ──────────────────────── */
 /* Usa localStorage do navegador — os dados ficam só no seu dispositivo. */
 
+function migrateState(s) {
+  if (!s || s.vitals) return s;
+  const vitals = {};
+  if (s.weeks) {
+    for (const [mon, w] of Object.entries(s.weeks)) {
+      if (w && (w.weight || w.restHr)) vitals[mon] = { weight: w.weight || "", restHr: w.restHr || "" };
+    }
+  }
+  const { weeks, ...rest } = s;
+  return { ...rest, vitals };
+}
 async function loadState() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) return migrateState(JSON.parse(raw));
   } catch (e) { /* sem dados salvos */ }
   return null;
 }
@@ -166,6 +182,14 @@ function foodWeekTotal(days, monday, key) {
   let t = 0;
   for (let i = 0; i < 7; i++) t += Number(days[addDays(monday, i)]?.[key] || 0);
   return t;
+}
+function weekVitalsAvg(vitals, monday, key) {
+  const vals = [];
+  for (let i = 0; i < 7; i++) {
+    const v = Number(vitals[addDays(monday, i)]?.[key]);
+    if (v > 0) vals.push(v);
+  }
+  return vals.length ? mean(vals) : null;
 }
 function lastNWeeks(n) {
   const cur = mondayOf(todayStr());
@@ -465,11 +489,11 @@ export default function App() {
 
   const today = todayStr();
   const monday = mondayOf(today);
-  const week = state.weeks[monday] || { weight: "", restHr: "" };
+  const todayVitals = state.vitals[today] || { weight: "", restHr: "" };
   const minutes = weekMinutes(state.workouts, monday);
 
-  function setWeekVal(mon, patch) {
-    update({ ...state, weeks: { ...state.weeks, [mon]: { ...(state.weeks[mon] || {}), ...patch } } });
+  function setVitalVal(date, patch) {
+    update({ ...state, vitals: { ...state.vitals, [date]: { ...(state.vitals[date] || {}), ...patch } } });
   }
   function setFoodDay(date, key, val) {
     const d = state.days[date] || { fish: 0, nuts: 0, oats: 0, olive: 0 };
@@ -501,8 +525,8 @@ export default function App() {
   const monthWk = state.workouts.filter((w) => w.date.startsWith(curMonth));
   const totalMonth = monthWk.reduce((s, w) => s + Number(w.minutes), 0);
 
-  const restVals = weeks12.map((m) => { const v = Number(state.weeks[m]?.restHr); return v > 0 ? v : null; });
-  const wtVals = weeks12.map((m) => { const v = Number(state.weeks[m]?.weight); return v > 0 ? v : null; });
+  const restVals = weeks12.map((m) => weekVitalsAvg(state.vitals, m, "restHr"));
+  const wtVals = weeks12.map((m) => weekVitalsAvg(state.vitals, m, "weight"));
   function delta(vals) {
     const recent = vals.slice(-4).filter((v) => v != null);
     const prev = vals.slice(-8, -4).filter((v) => v != null);
@@ -512,8 +536,10 @@ export default function App() {
   const dRest = delta(restVals), dWt = delta(wtVals);
   const fmtDelta = (d, unit) => (d == null ? "—" : `${d > 0 ? "+" : ""}${d.toFixed(1)} ${unit}`);
 
-  const restSeries = weeks12.map((m, i) => ({ l: wLabels[i], v: restVals[i] })).filter((p) => p.v != null);
-  const wtSeries = weeks12.map((m, i) => ({ l: wLabels[i], v: wtVals[i] })).filter((p) => p.v != null);
+  const restSeries = weeks12.map((m, i) => ({ l: wLabels[i], v: restVals[i] != null ? Math.round(restVals[i]) : null }))
+    .filter((p) => p.v != null);
+  const wtSeries = weeks12.map((m, i) => ({ l: wLabels[i], v: wtVals[i] != null ? Math.round(wtVals[i] * 10) / 10 : null }))
+    .filter((p) => p.v != null);
 
   const hrSeries = weeks12.map((m, i) => {
     const end = addDays(m, 6);
@@ -553,22 +579,22 @@ export default function App() {
         ))}
       </Card>
 
-      <Card title="Medidas da semana">
+      <Card title="Medidas de hoje">
         <div style={{ display: "flex", gap: 12 }}>
           <label style={{ flex: 1 }}>
             <span style={{ fontSize: 12, color: C.mute }}>Peso (kg)</span>
-            <input type="number" step="0.1" value={week.weight}
-              onChange={(e) => setWeekVal(monday, { weight: e.target.value })}
+            <input type="number" step="0.1" value={todayVitals.weight}
+              onChange={(e) => setVitalVal(today, { weight: e.target.value })}
               style={{ ...inputStyle, marginTop: 4, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
           </label>
           <label style={{ flex: 1 }}>
             <span style={{ fontSize: 12, color: C.mute }}>FC repouso (bpm)</span>
-            <input type="number" value={week.restHr}
-              onChange={(e) => setWeekVal(monday, { restHr: e.target.value })}
+            <input type="number" value={todayVitals.restHr}
+              onChange={(e) => setVitalVal(today, { restHr: e.target.value })}
               style={{ ...inputStyle, marginTop: 4, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
           </label>
         </div>
-        <div style={{ fontSize: 11, color: C.mute, marginTop: 8 }}>Registro semanal — anote uma vez por semana, de preferência no mesmo dia.</div>
+        <div style={{ fontSize: 11, color: C.mute, marginTop: 8 }}>Registro diário — anote todos os dias, de preferência ao acordar.</div>
       </Card>
     </>
   );
@@ -634,7 +660,9 @@ export default function App() {
   const daysSorted = Object.entries(state.days)
     .filter(([, v]) => FOODS.some((f) => Number(v[f.key]) > 0))
     .sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 14);
-  const weeksSorted = lastNWeeks(12).slice().reverse();
+  const vitalsSorted = Object.entries(state.vitals)
+    .filter(([, v]) => v.weight || v.restHr)
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 14);
 
   const Registros = (
     <>
@@ -643,7 +671,7 @@ export default function App() {
           {[
             ["Treino", () => setModal({ kind: "treino" })],
             ["Alimentação", () => setModal({ kind: "dia", date: today })],
-            ["Medidas", () => setModal({ kind: "semana", monday })],
+            ["Medidas", () => setModal({ kind: "vitals", date: today })],
           ].map(([l, fn]) => (
             <button key={l} onClick={fn}
               style={{ padding: "12px 4px", borderRadius: 12, border: `1.5px solid ${C.line}`, background: "#fff", fontFamily: "'Sora', sans-serif", fontWeight: 600, fontSize: 13, color: C.ink, cursor: "pointer" }}>
@@ -689,22 +717,21 @@ export default function App() {
         ))}
       </Card>
 
-      <Card title="Medidas semanais · 12 semanas">
-        {weeksSorted.map((mon) => {
-          const w = state.weeks[mon] || {};
-          const has = w.weight || w.restHr;
-          return (
-            <div key={mon} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
-              <div>
-                <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 14, fontWeight: 600, color: C.ink }}>{weekLabel(mon)}</div>
-                <div style={{ fontSize: 12, color: has ? C.mute : C.line }}>
-                  {has ? `${w.weight ? w.weight + " kg" : "peso —"} · ${w.restHr ? "FC " + w.restHr : "FC —"}` : "sem registro"}
-                </div>
+      <Card title="Medidas diárias · últimos dias">
+        {vitalsSorted.length === 0 && <Empty>Nenhum registro de peso/FC ainda.</Empty>}
+        {vitalsSorted.map(([date, v]) => (
+          <div key={date} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
+            <div>
+              <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 14, fontWeight: 600, color: C.ink }}>
+                {fmtBR(date)} <span style={{ color: C.mute, fontWeight: 400 }}>· {weekdayShort(date)}</span>
               </div>
-              <SmallBtn onClick={() => setModal({ kind: "semana", monday: mon })}>editar</SmallBtn>
+              <div style={{ fontSize: 12, color: C.mute }}>
+                {v.weight ? v.weight + " kg" : "peso —"} · {v.restHr ? "FC " + v.restHr : "FC —"}
+              </div>
             </div>
-          );
-        })}
+            <SmallBtn onClick={() => setModal({ kind: "vitals", date })}>editar</SmallBtn>
+          </div>
+        ))}
       </Card>
     </>
   );
@@ -762,7 +789,7 @@ export default function App() {
   /* ═══ Modais ═══ */
 
   function TreinoModal({ w }) {
-    const [f, setF] = useState(w ? { ...w } : { date: today, minutes: "", type: "Corrida", avgHr: "" });
+    const [f, setF] = useState(w ? { ...w } : { date: today, minutes: "", type: "Elíptico", avgHr: "" });
     return (
       <Modal title={w ? "Editar treino" : "Registrar treino"} onClose={() => setModal(null)}>
         <Field label="Data"><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={inputStyle} /></Field>
@@ -772,7 +799,7 @@ export default function App() {
         </Field>
         <Field label="Tipo">
           <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={inputStyle}>
-            {["Corrida", "Bike", "Caminhada rápida", "Natação", "Outro"].map((t) => <option key={t}>{t}</option>)}
+            {["Elíptico", "Corrida", "Bike", "Caminhada rápida", "Natação", "Outro"].map((t) => <option key={t}>{t}</option>)}
           </select>
         </Field>
         <Field label="FC média (opcional)">
@@ -817,21 +844,19 @@ export default function App() {
     );
   }
 
-  function SemanaModal({ monday: initialMon }) {
-    const [dateRef, setDateRef] = useState(initialMon || monday);
-    const mon = mondayOf(dateRef);
-    const w = state.weeks[mon] || { weight: "", restHr: "" };
-    const [f, setF] = useState({ weight: w.weight || "", restHr: w.restHr || "" });
+  function VitalsModal({ date: initialDate }) {
+    const [date, setDate] = useState(initialDate || today);
+    const v = state.vitals[date] || { weight: "", restHr: "" };
+    const [f, setF] = useState({ weight: v.weight || "", restHr: v.restHr || "" });
     useEffect(() => {
-      const ww = state.weeks[mon] || { weight: "", restHr: "" };
-      setF({ weight: ww.weight || "", restHr: ww.restHr || "" });
-    }, [mon]);
+      const vv = state.vitals[date] || { weight: "", restHr: "" };
+      setF({ weight: vv.weight || "", restHr: vv.restHr || "" });
+    }, [date]);
     return (
-      <Modal title="Medidas da semana" onClose={() => setModal(null)}>
-        <Field label="Qualquer dia da semana desejada">
-          <input type="date" value={dateRef} max={today} onChange={(e) => setDateRef(e.target.value)} style={inputStyle} />
+      <Modal title="Medidas do dia" onClose={() => setModal(null)}>
+        <Field label="Data">
+          <input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
         </Field>
-        <div style={{ fontSize: 13, color: C.mute, marginBottom: 12 }}>Semana selecionada: <b style={{ color: C.ink }}>{weekLabel(mon)}</b></div>
         <div style={{ display: "flex", gap: 10 }}>
           <Field label="Peso (kg)">
             <input type="number" step="0.1" value={f.weight} onChange={(e) => setF({ ...f, weight: e.target.value })}
@@ -842,7 +867,7 @@ export default function App() {
               style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
           </Field>
         </div>
-        <PrimaryBtn onClick={() => { setWeekVal(mon, { weight: f.weight, restHr: f.restHr }); setModal(null); }}>Salvar medidas</PrimaryBtn>
+        <PrimaryBtn onClick={() => { setVitalVal(date, { weight: f.weight, restHr: f.restHr }); setModal(null); }}>Salvar medidas</PrimaryBtn>
       </Modal>
     );
   }
@@ -890,11 +915,11 @@ export default function App() {
       const t = ["data,minutos,tipo,fc_media", ...state.workouts.map((w) => `${w.date},${w.minutes},${w.type},${w.avgHr || ""}`)].join("\n");
       const e = ["data,ct,hdl,tg,ldl,nota", ...state.exams.map((x) => `${x.date},${x.ct},${x.hdl},${x.tg},${ldlOf(x.ct, x.hdl, x.tg) ?? ""},"${x.note || ""}"`)].join("\n");
       const d = ["data,peixe,castanhas,aveia,azeite", ...Object.entries(state.days).sort().map(([k, v]) => `${k},${v.fish || 0},${v.nuts || 0},${v.oats || 0},${v.olive || 0}`)].join("\n");
-      const s = ["semana,peso,fc_repouso", ...Object.entries(state.weeks).sort().map(([k, w]) => `${k},${w.weight || ""},${w.restHr || ""}`)].join("\n");
+      const s = ["data,peso,fc_repouso", ...Object.entries(state.vitals).sort().map(([k, w]) => `${k},${w.weight || ""},${w.restHr || ""}`)].join("\n");
       download("treinos.csv", t, "text/csv");
       download("exames.csv", e, "text/csv");
       download("alimentacao-diaria.csv", d, "text/csv");
-      download("semanas.csv", s, "text/csv");
+      download("medidas-diarias.csv", s, "text/csv");
     }
     function resumo() {
       const ex = [...state.exams].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
@@ -907,8 +932,8 @@ export default function App() {
         "",
         `Exercício: média ${media12} min/semana em zona (${state.goals.zoneLow}–${state.goals.zoneHigh} bpm) · meta ${state.goals.minWeek} min`,
         `${weeksOnGoal}/12 semanas na meta · sequência atual ${streak} sem · recorde ${record} min`,
-        `FC de repouso: ${week.restHr || "—"} bpm (Δ 4 sem: ${fmtDelta(dRest, "bpm")})`,
-        `Peso: ${week.weight || "—"} kg (Δ 4 sem: ${fmtDelta(dWt, "kg")})`,
+        `FC de repouso hoje: ${todayVitals.restHr || "—"} bpm (Δ 4 sem: ${fmtDelta(dRest, "bpm")})`,
+        `Peso hoje: ${todayVitals.weight || "—"} kg (Δ 4 sem: ${fmtDelta(dWt, "kg")})`,
         "",
         `Adesão alimentar geral: ${adesaoGeral}% (média 4 semanas)`,
         ...foodAdesao.map((f) => `  ${f.name}: ${f.avg.toFixed(1)}/${state.goals[f.key]} porções/sem (${f.pct}%)`),
@@ -921,7 +946,7 @@ export default function App() {
       const r = new FileReader();
       r.onload = () => {
         try {
-          const parsed = JSON.parse(r.result);
+          const parsed = migrateState(JSON.parse(r.result));
           if (parsed.goals && parsed.exams) { update(parsed); setModal(null); }
           else alert("Arquivo não reconhecido como backup do app.");
         } catch { alert("Não foi possível ler o arquivo. Confira se é o backup JSON."); }
@@ -997,23 +1022,25 @@ export default function App() {
           style={{ border: `1.5px solid ${C.line}`, background: "#fff", borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: "pointer" }}>⚙</button>
       </header>
 
-      <main style={{ maxWidth: 480, margin: "0 auto", padding: "10px 16px 90px" }}>
+      <main style={{ maxWidth: 480, margin: "0 auto", padding: "10px 16px calc(104px + env(safe-area-inset-bottom))" }}>
         {tab === "home" && Home}
         {tab === "trends" && Trends}
         {tab === "log" && Registros}
         {tab === "exams" && Exams}
       </main>
 
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}` }}>
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}`, paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div style={{ maxWidth: 480, margin: "0 auto", display: "flex" }}>
           {tabs.map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
               style={{
-                flex: 1, padding: "13px 0 15px", border: "none", background: "none", cursor: "pointer",
-                fontFamily: "'Sora', sans-serif", fontSize: 12.5,
-                fontWeight: tab === id ? 700 : 400,
+                flex: 1, minHeight: 60, padding: "16px 4px", border: "none", cursor: "pointer",
+                background: tab === id ? C.seaSoft : "none",
+                fontFamily: "'Sora', sans-serif", fontSize: 13.5,
+                fontWeight: tab === id ? 700 : 500,
                 color: tab === id ? C.ink : C.mute,
                 borderTop: tab === id ? `3px solid ${C.sea}` : "3px solid transparent",
+                WebkitTapHighlightColor: "transparent",
               }}>{label}</button>
           ))}
         </div>
@@ -1021,7 +1048,7 @@ export default function App() {
 
       {modal?.kind === "treino" && <TreinoModal w={modal.w} />}
       {modal?.kind === "dia" && <DiaModal date={modal.date} />}
-      {modal?.kind === "semana" && <SemanaModal monday={modal.monday} />}
+      {modal?.kind === "vitals" && <VitalsModal date={modal.date} />}
       {modal?.kind === "exame" && <ExameModal e={modal.e} />}
       {modal?.kind === "config" && <ConfigModal />}
     </div>
