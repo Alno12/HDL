@@ -414,10 +414,15 @@ function Modal({ title, onClose, children }) {
     </div>
   );
 }
-function PrimaryBtn({ children, onClick, tone = C.blue }) {
+function PrimaryBtn({ children, onClick, tone = C.blue, disabled = false }) {
   return (
-    <button onClick={onClick}
-      style={{ width: "100%", padding: "15px 16px", minHeight: 50, borderRadius: 12, border: "none", background: tone, color: "#fff", fontSize: 17, fontWeight: 600, fontFamily: SYS, cursor: "pointer", WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}>
+    <button onClick={disabled ? undefined : onClick} disabled={disabled} aria-disabled={disabled}
+      style={{
+        width: "100%", padding: "15px 16px", minHeight: 50, borderRadius: 12, border: "none",
+        background: tone, color: "#fff", fontSize: 17, fontWeight: 600, fontFamily: SYS,
+        cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.55 : 1,
+        WebkitTapHighlightColor: "transparent", touchAction: "manipulation",
+      }}>
       {children}
     </button>
   );
@@ -679,6 +684,77 @@ function Stat({ label, value, sub, tone }) {
   );
 }
 
+/* ───────────────  Medidas de hoje (rascunho + botão)  ────────────── */
+
+// O card "Medidas de hoje" da Home usa um RASCUNHO local (weight/restHr
+// nesse componente) em vez de gravar em state.vitals a cada tecla — assim
+// nada é salvo sem o usuário tocar em "Registrar" (evita gravar lixo se o
+// app for fechado no meio da digitação) e o toque no botão vira o único
+// sinal claro de que o registro aconteceu. `onSave` grava os dois campos
+// juntos, numa única atualização.
+function VitalsTodayCard({ vitals, today, onSave }) {
+  const saved = vitals[today] || { weight: "", restHr: "" };
+  const [weight, setWeight] = useState(saved.weight ?? "");
+  const [restHr, setRestHr] = useState(saved.restHr ?? "");
+  const [justSaved, setJustSaved] = useState(false);
+  const timerRef = useRef(null);
+
+  // Resincroniza o rascunho quando o valor SALVO de hoje muda por outra via
+  // (ex.: editado no modal "Medidas do dia") ou quando o dia vira (app
+  // aberto passando a meia-noite). Digitar no rascunho não altera `saved`,
+  // então isso não interfere na digitação em andamento.
+  useEffect(() => {
+    setWeight(saved.weight ?? "");
+    setRestHr(saved.restHr ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today, saved.weight, saved.restHr]);
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const hasSaved = hasVal(saved.weight) || hasVal(saved.restHr);
+  const isDirty = weight !== (saved.weight ?? "") || restHr !== (saved.restHr ?? "");
+  // isDirty vence justSaved: se o usuário editar dentro da janela de 2s do
+  // feedback, o botão volta imediatamente a "Atualizar" (achado do QA).
+  const label = isDirty ? (hasSaved ? "Atualizar" : "Registrar") : justSaved || hasSaved ? "Registrado ✓" : "Registrar";
+  // "Registrado ✓" é confirmação, não alvo de ação — desabilita também na janela de 2s.
+  const disabled = !isDirty && (hasSaved || justSaved);
+
+  function handleRegister() {
+    if (!confirmRange("weight", weight)) return;
+    if (!confirmRange("restHr", restHr)) return;
+    if (!confirmWeightJump(vitals, today, weight)) return;
+    onSave(today, { weight, restHr });
+    setJustSaved(true);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setJustSaved(false), 2000);
+  }
+
+  return (
+    <Card tint={C.mute} title="Medidas de hoje">
+      <div style={{ display: "flex", gap: 12 }}>
+        <label style={{ flex: 1 }}>
+          <span style={{ fontSize: 13, color: C.body, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><CatIcon kind="body" size={15} /> Peso (kg)</span>
+          <input type="number" step="0.1" inputMode="decimal" value={weight}
+            onChange={(e) => setWeight(e.target.value)}
+            style={{ ...inputStyle, marginTop: 6, fontFamily: SYS }} placeholder="—" />
+        </label>
+        <label style={{ flex: 1 }}>
+          <span style={{ fontSize: 13, color: C.heartTx, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><CatIcon kind="heart" size={15} /> FC repouso (bpm)</span>
+          <input type="number" inputMode="numeric" value={restHr}
+            onChange={(e) => setRestHr(e.target.value)}
+            style={{ ...inputStyle, marginTop: 6, fontFamily: SYS }} placeholder="—" />
+        </label>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <PrimaryBtn tone={C.blue} onClick={handleRegister} disabled={disabled}>{label}</PrimaryBtn>
+      </div>
+      <div style={{ fontSize: 12, color: C.mute, marginTop: 10 }}>
+        Toque em Registrar para salvar as medidas de hoje.
+      </div>
+    </Card>
+  );
+}
+
 /* ─────────────────────────  App  ───────────────────────────────── */
 
 export default function App() {
@@ -686,8 +762,6 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [modal, setModal] = useState(null); // {kind, ...payload}
   const saveTimer = useRef(null);
-  const weightFocusRef = useRef(""); // valor ao focar o campo, p/ reverter se o aviso de faixa for recusado
-  const hrFocusRef = useRef("");
 
   useEffect(() => { loadState().then((s) => setState(s || demoState())); }, []);
 
@@ -903,36 +977,7 @@ export default function App() {
         ))}
       </Card>
 
-      <Card tint={C.mute} title="Medidas de hoje">
-        <div style={{ display: "flex", gap: 12 }}>
-          <label style={{ flex: 1 }}>
-            <span style={{ fontSize: 13, color: C.body, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><CatIcon kind="body" size={15} /> Peso (kg)</span>
-            <input type="number" step="0.1" inputMode="decimal" value={todayVitals.weight ?? ""}
-              onFocus={(e) => { weightFocusRef.current = e.target.value; }}
-              onChange={(e) => setVitalVal(today, { weight: e.target.value })}
-              onBlur={(e) => {
-                const val = e.target.value;
-                if (val === "" || val === weightFocusRef.current) return;
-                const ok = confirmRange("weight", val) && confirmWeightJump(state.vitals, today, val);
-                if (!ok) setVitalVal(today, { weight: weightFocusRef.current });
-              }}
-              style={{ ...inputStyle, marginTop: 6, fontFamily: SYS }} placeholder="—" />
-          </label>
-          <label style={{ flex: 1 }}>
-            <span style={{ fontSize: 13, color: C.heartTx, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><CatIcon kind="heart" size={15} /> FC repouso (bpm)</span>
-            <input type="number" inputMode="numeric" value={todayVitals.restHr ?? ""}
-              onFocus={(e) => { hrFocusRef.current = e.target.value; }}
-              onChange={(e) => setVitalVal(today, { restHr: e.target.value })}
-              onBlur={(e) => {
-                const val = e.target.value;
-                if (val === "" || val === hrFocusRef.current) return;
-                if (!confirmRange("restHr", val)) setVitalVal(today, { restHr: hrFocusRef.current });
-              }}
-              style={{ ...inputStyle, marginTop: 6, fontFamily: SYS }} placeholder="—" />
-          </label>
-        </div>
-        <div style={{ fontSize: 12, color: C.mute, marginTop: 10 }}>Registro diário — anote todos os dias, de preferência ao acordar.</div>
-      </Card>
+      <VitalsTodayCard vitals={state.vitals} today={today} onSave={(date, patch) => setVitalVal(date, patch)} />
     </>
   );
 
