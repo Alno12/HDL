@@ -29,6 +29,7 @@ do escopo.
 | `graficos-analista` | Gráficos SVG, estatísticas, correlações, projeções, métricas novas | itens 8, 9 | **sonnet** | idem |
 | `pwa-engenheiro` | Manifest, service worker, offline, assets, notificações, build/deploy, performance | itens 4, 5 | **sonnet** | idem |
 | `integracoes` | Sync em nuvem, import CSV de relógios (Strava/Garmin/Polar), APIs externas, autenticação | itens 1 (etapa 3), 10 | **sonnet** | idem |
+| `designer-visual` | Design visual, linguagem do app, adaptação a aparelhos (iPhone 16 Pro/Safari), ergonomia persistente | redesign do menu inferior e design pass iPhone 16 Pro | **opus** | design é julgamento com alto custo de errar de novo — duas correções pontuais não resolveram o problema até o redesign diagnosticado |
 
 ### Qualidade (etapas obrigatórias do pipeline)
 

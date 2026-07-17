@@ -148,7 +148,7 @@ function demoState() {
     exams: [
       { id: "e0", date: "2026-01-20", ct: 162, hdl: 35, tg: 118, note: "Antes de começar" },
       { id: "e05", date: "2026-04-14", ct: 158, hdl: 37, tg: 104, note: "3 meses de caminhada" },
-      { id: "e1", date: "2026-07-15", ct: 155, hdl: 39, tg: 97, note: "Início do plano estruturado" },
+      { id: "e1", date: "2026-07-15", ct: 155, hdl: 39, tg: 97, apoB: 92, lpa: 18, note: "Início do plano estruturado" },
     ],
   };
 }
@@ -265,7 +265,15 @@ const RANGES = {
   restHr: { min: 30, max: 220, label: "FC de repouso", unit: "bpm" },
   avgHr: { min: 30, max: 220, label: "FC média do treino", unit: "bpm" },
   minutes: { min: 1, max: 600, label: "Minutos de treino", unit: "min" },
+  apoB: { min: 20, max: 300, label: "ApoB", unit: "mg/dL" },
+  lpa: { min: 0, max: 500, label: "Lp(a)", unit: "mg/dL" },
 };
+// Um valor opcional é considerado "presente" apenas quando não é
+// undefined/null/"" — usado para exames antigos sem ApoB/Lp(a) (undefined)
+// e para não confundir um Lp(a) genuinamente igual a 0 com "ausente".
+function hasVal(v) {
+  return v !== undefined && v !== null && v !== "";
+}
 function confirmRange(key, value) {
   if (value === "" || value == null) return true;
   const n = Number(value);
@@ -550,7 +558,10 @@ function Line({ points, goal, unit, color = C.ink, band }) {
         <text key={"t" + i} x={x(i)} y={y(p.v) - 7} textAnchor="middle" fontSize="9" fill={C.mute}>{p.v}{unit || ""}</text>
       ) : null)}
       {points.map((p, i) => p.l && (points.length <= 6 || i % 2 === 0) ? (
-        <text key={"l" + i} x={x(i)} y={H + 11} textAnchor="middle" fontSize="8.5" fill={C.mute}>{p.l}</text>
+        // Extremos ancoram para dentro (start/end) — senão o 1º e o último
+        // rótulo de data vazam da largura do SVG e aparecem cortados no card.
+        <text key={"l" + i} x={i === 0 ? 2 : i === points.length - 1 ? W - 2 : x(i)} y={H + 11}
+          textAnchor={i === 0 ? "start" : i === points.length - 1 ? "end" : "middle"} fontSize="8.5" fill={C.mute}>{p.l}</text>
       ) : null)}
     </svg>
   );
@@ -596,8 +607,15 @@ export default function App() {
   const insights = useMemo(() => {
     if (!state) return { empty: true };
     const today = todayStr();
+
+    // Alimento com a maior meta semanal (ex.: azeite) — depende só das metas
+    // configuradas, não de haver dados registrados, então fica disponível
+    // mesmo no estado vazio (evita acessar propriedade de undefined no card
+    // "Constância e corpo" quando ainda não há nenhum registro).
+    const topGoalFood = [...FOODS].sort((a, b) => (Number(state.goals[b.key]) || 0) - (Number(state.goals[a.key]) || 0))[0];
+
     const hasAnyData = state.workouts.length > 0 || Object.keys(state.days).length > 0 || Object.keys(state.vitals).length > 0;
-    if (!hasAnyData) return { empty: true };
+    if (!hasAnyData) return { empty: true, topGoalFood };
 
     // Constância — sequência de peso registrado.
     const weightDates = Object.keys(state.vitals)
@@ -646,22 +664,8 @@ export default function App() {
     const inZone = hrWorkouts.filter((w) => Number(w.avgHr) >= state.goals.zoneLow && Number(w.avgHr) <= state.goals.zoneHigh);
     const pctZone = hrWorkouts.length ? Math.round((inZone.length / hrWorkouts.length) * 100) : null;
 
-    // Alimentação — melhor/pior adesão nas últimas 4 semanas.
-    const weeks4 = lastNWeeks(4);
-    const adesao4 = FOODS.map((f) => {
-      const totals = weeks4.map((m) => foodWeekTotal(state.days, m, f.key));
-      const avg = mean(totals) || 0;
-      const goal = Number(state.goals[f.key]) || 0;
-      const pct = goal > 0 ? Math.min(100, Math.round((avg / goal) * 100)) : 0;
-      return { ...f, avg, pct };
-    }).sort((a, b) => b.pct - a.pct);
-    const algumaAdesao = adesao4.some((f) => f.avg > 0);
-    const melhorFood = adesao4[0];
-    const piorFood = adesao4[adesao4.length - 1];
-    const foodInsightValido = algumaAdesao && melhorFood.key !== piorFood.key;
-
     // Sequência diária no alimento de meta semanal mais alta (ex.: azeite).
-    const topGoalFood = [...FOODS].sort((a, b) => (Number(state.goals[b.key]) || 0) - (Number(state.goals[a.key]) || 0))[0];
+    // (topGoalFood já foi calculado acima, antes do guard de dados vazios.)
     const topFoodSet = new Set(
       Object.entries(state.days).filter(([, v]) => Number(v[topGoalFood.key]) > 0).map(([d]) => d)
     );
@@ -681,14 +685,13 @@ export default function App() {
       bestWd, bestWdCount: bestWd >= 0 ? weekdayCounts[bestWd] : 0,
       avgDuration, maxDuration,
       pctZone, hrWorkoutsCount: hrWorkouts.length,
-      melhorFood, piorFood, foodInsightValido,
       topGoalFood, topFoodStreak, topFoodSetSize: topFoodSet.size,
       deltaWeight30,
     };
   }, [state]);
 
   if (!state)
-    return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: C.mist, color: C.mute, fontFamily: "'IBM Plex Sans', sans-serif" }}>Carregando…</div>;
+    return <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", background: C.mist, color: C.mute, fontFamily: "'IBM Plex Sans', sans-serif" }}>Carregando…</div>;
 
   const today = todayStr();
   const monday = mondayOf(today);
@@ -754,9 +757,19 @@ export default function App() {
   const foodAdesao = FOODS.map((f) => {
     const totals = weeks4.map((m) => foodWeekTotal(state.days, m, f.key));
     const avg = mean(totals) || 0;
-    return { ...f, avg, pct: Math.min(100, Math.round((avg / state.goals[f.key]) * 100)) };
+    const goal = Number(state.goals[f.key]);
+    return { ...f, avg, pct: goal > 0 ? Math.min(100, Math.round((avg / goal) * 100)) : 0 };
   });
   const adesaoGeral = Math.round(mean(foodAdesao.map((f) => f.pct)));
+
+  // Melhor/pior alimento das últimas 4 semanas, derivado do mesmo
+  // `foodAdesao` usado nas barras — evita recalcular a adesão por alimento
+  // uma segunda vez (antes era feito de novo dentro de `insights`).
+  const foodAdesaoRanked = [...foodAdesao].sort((a, b) => b.pct - a.pct);
+  const algumaAdesao = foodAdesaoRanked.some((f) => f.avg > 0);
+  const melhorFood = foodAdesaoRanked[0];
+  const piorFood = foodAdesaoRanked[foodAdesaoRanked.length - 1];
+  const foodInsightValido = algumaAdesao && melhorFood.key !== piorFood.key;
 
   /* ═══ Home ═══ */
 
@@ -786,7 +799,7 @@ export default function App() {
         <div style={{ display: "flex", gap: 12 }}>
           <label style={{ flex: 1 }}>
             <span style={{ fontSize: 12, color: C.mute }}>Peso (kg)</span>
-            <input type="number" step="0.1" inputMode="decimal" value={todayVitals.weight}
+            <input type="number" step="0.1" inputMode="decimal" value={todayVitals.weight ?? ""}
               onFocus={(e) => { weightFocusRef.current = e.target.value; }}
               onChange={(e) => setVitalVal(today, { weight: e.target.value })}
               onBlur={(e) => {
@@ -799,7 +812,7 @@ export default function App() {
           </label>
           <label style={{ flex: 1 }}>
             <span style={{ fontSize: 12, color: C.mute }}>FC repouso (bpm)</span>
-            <input type="number" inputMode="numeric" value={todayVitals.restHr}
+            <input type="number" inputMode="numeric" value={todayVitals.restHr ?? ""}
               onFocus={(e) => { hrFocusRef.current = e.target.value; }}
               onChange={(e) => setVitalVal(today, { restHr: e.target.value })}
               onBlur={(e) => {
@@ -826,9 +839,33 @@ export default function App() {
           <Stat label="Sequência atual" value={streak > 0 ? `${streak} sem` : "—"} sub="semanas seguidas na meta" />
           <Stat label="Recorde semanal" value={`${record} min`} sub="melhor semana do período" />
           <Stat label="Total no mês" value={`${totalMonth} min`} sub={`${monthWk.length} treinos em ${MESES[Number(curMonth.slice(5)) - 1]}`} />
-          <Stat label="Adesão alimentar" value={`${adesaoGeral}%`} sub={`média 4 sem, ${FOODS.length} alimentos`} tone={adesaoGeral >= 80 ? C.sea : undefined} />
+          <Stat label="FC na zona" value={insights.pctZone != null ? `${insights.pctZone}%` : "—"}
+            sub={insights.pctZone != null ? `${insights.hrWorkoutsCount} treino${insights.hrWorkoutsCount > 1 ? "s" : ""} com FC média` : "anote a FC média do treino"}
+            tone={insights.pctZone != null && insights.pctZone >= 70 ? C.sea : undefined} />
+          <Stat label="Dia mais treinado" value={insights.bestWd >= 0 ? WEEKDAY_CAP[insights.bestWd] : "—"}
+            sub={insights.bestWd >= 0 ? `${insights.bestWdCount}× nas últimas 12 sem` : "sem treinos ainda"} />
+          <Stat label="Duração média" value={insights.avgDuration != null ? `${insights.avgDuration} min` : "—"}
+            sub={insights.maxDuration != null ? `por sessão · recorde ${insights.maxDuration} min` : "por sessão"} />
+        </div>
+      </Card>
+
+      <Card title="Constância e corpo">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+          <Stat label="Sequência de peso"
+            value={insights.weightStreak > 0 ? `${insights.weightStreak} dia${insights.weightStreak > 1 ? "s" : ""}` : "—"}
+            sub={insights.weightStreakBest > 0 ? `recorde: ${insights.weightStreakBest} dia${insights.weightStreakBest > 1 ? "s" : ""}` : "registre o peso hoje"}
+            tone={insights.weightStreak >= 7 ? C.sea : undefined} />
+          <Stat label="Constância · 30 dias" value={insights.empty ? "—" : `${insights.pct30}%`} sub="dias com algum registro"
+            tone={!insights.empty && insights.pct30 >= 80 ? C.sea : undefined} />
           <Stat label="Δ FC repouso" value={fmtDelta(dRest, "bpm")} sub="4 sem vs 4 anteriores" tone={dRest != null && dRest < 0 ? C.sea : undefined} />
-          <Stat label="Δ Peso" value={fmtDelta(dWt, "kg")} sub="4 sem vs 4 anteriores" tone={dWt != null && dWt < 0 ? C.sea : undefined} />
+          <Stat label="Δ Peso · 4 sem" value={fmtDelta(dWt, "kg")} sub="4 sem vs 4 anteriores" tone={dWt != null && dWt < 0 ? C.sea : undefined} />
+          <Stat label="Peso · 30 dias"
+            value={insights.deltaWeight30 != null ? `${insights.deltaWeight30 > 0 ? "+" : ""}${insights.deltaWeight30.toFixed(1)} kg` : "—"}
+            sub="primeiro vs. último registro"
+            tone={insights.deltaWeight30 != null && insights.deltaWeight30 < 0 ? C.sea : undefined} />
+          <Stat label={`Sequência · ${insights.topGoalFood.name.split(" ")[0]}`}
+            value={insights.topFoodSetSize > 0 ? `${insights.topFoodStreak} dia${insights.topFoodStreak !== 1 ? "s" : ""}` : "—"}
+            sub={`${insights.topGoalFood.emoji} dias seguidos com registro`} />
         </div>
       </Card>
 
@@ -837,6 +874,24 @@ export default function App() {
         {minsSeries.some((v) => v > 0)
           ? <Bars data={minsSeries} goal={state.goals.minWeek} labels={wLabels} ma={maSeries} />
           : <Empty>Registre treinos para ver a evolução aqui.</Empty>}
+      </Card>
+
+      <Card title="Treinos por tipo · 12 semanas">
+        {insights.typeDist && insights.typeDist.length > 0 ? (
+          insights.typeDist.map((t) => (
+            <div key={t.type} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0" }}>
+              <span style={{ fontSize: 13, width: 108, color: C.ink, flexShrink: 0 }}>{t.type}</span>
+              <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.seaSoft, overflow: "hidden" }}>
+                <div style={{ width: `${t.pct}%`, height: "100%", background: C.sea }} />
+              </div>
+              <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 12, color: C.mute, width: 62, textAlign: "right", flexShrink: 0 }}>
+                {t.n} · {t.pct}%
+              </span>
+            </div>
+          ))
+        ) : (
+          <Empty>Registre treinos para ver a distribuição por tipo.</Empty>
+        )}
       </Card>
 
       <Card title="FC média dos treinos"
@@ -858,6 +913,11 @@ export default function App() {
             </span>
           </div>
         ))}
+        {foodInsightValido && (
+          <div style={{ background: C.mist, borderRadius: 12, padding: "11px 13px", fontSize: 13, color: C.ink, marginTop: 10 }}>
+            {melhorFood.emoji} <b>{melhorFood.name.split(" ")[0]}</b> é seu ponto forte · {piorFood.emoji} <b>{piorFood.name.split(" ")[0]}</b> precisa de atenção
+          </div>
+        )}
       </Card>
 
       <Card title="FC de repouso · semanal">
@@ -868,64 +928,6 @@ export default function App() {
         {wtSeries.length >= 2 ? <Line points={wtSeries} goal={Number(state.goals.weightGoal) || null} /> : <Empty>Anote o peso semanal na Home.</Empty>}
       </Card>
     </>
-  );
-
-  /* ═══ Insights de Registros ═══ */
-
-  const InsightsCard = (
-    <Card title="Seus números">
-      {insights.empty ? (
-        <Empty>Registre treinos, alimentação ou medidas para ver seus números aqui.</Empty>
-      ) : (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 16 }}>
-            <Stat label="Sequência de peso"
-              value={insights.weightStreak > 0 ? `${insights.weightStreak} dia${insights.weightStreak > 1 ? "s" : ""}` : "—"}
-              sub={insights.weightStreakBest > 0 ? `recorde: ${insights.weightStreakBest} dia${insights.weightStreakBest > 1 ? "s" : ""}` : "registre o peso hoje"}
-              tone={insights.weightStreak >= 7 ? C.sea : undefined} />
-            <Stat label="Constância · 30 dias" value={`${insights.pct30}%`} sub="dias com algum registro"
-              tone={insights.pct30 >= 80 ? C.sea : undefined} />
-            <Stat label="Dia mais treinado" value={insights.bestWd >= 0 ? WEEKDAY_CAP[insights.bestWd] : "—"}
-              sub={insights.bestWd >= 0 ? `${insights.bestWdCount}× nas últimas 12 sem` : "sem treinos ainda"} />
-            <Stat label="Duração média" value={insights.avgDuration != null ? `${insights.avgDuration} min` : "—"} sub="por sessão" />
-            <Stat label="Treino mais longo" value={insights.maxDuration != null ? `${insights.maxDuration} min` : "—"} sub="recorde pessoal" />
-            <Stat label="FC na zona" value={insights.pctZone != null ? `${insights.pctZone}%` : "—"}
-              sub={insights.pctZone != null ? `${insights.hrWorkoutsCount} treino${insights.hrWorkoutsCount > 1 ? "s" : ""} com FC média` : "anote a FC média do treino"}
-              tone={insights.pctZone != null && insights.pctZone >= 70 ? C.sea : undefined} />
-            <Stat label={`Sequência · ${insights.topGoalFood.name.split(" ")[0]}`}
-              value={insights.topFoodSetSize > 0 ? `${insights.topFoodStreak} dia${insights.topFoodStreak !== 1 ? "s" : ""}` : "—"}
-              sub={`${insights.topGoalFood.emoji} dias seguidos com registro`} />
-            <Stat label="Peso · 30 dias"
-              value={insights.deltaWeight30 != null ? `${insights.deltaWeight30 > 0 ? "+" : ""}${insights.deltaWeight30.toFixed(1)} kg` : "—"}
-              sub="primeiro vs. último registro"
-              tone={insights.deltaWeight30 != null && insights.deltaWeight30 < 0 ? C.sea : undefined} />
-          </div>
-
-          {insights.typeDist.length > 0 && (
-            <div style={{ marginBottom: insights.foodInsightValido ? 14 : 0 }}>
-              <div style={{ fontSize: 11, color: C.mute, fontWeight: 600, marginBottom: 8 }}>Treinos por tipo · 12 semanas</div>
-              {insights.typeDist.map((t) => (
-                <div key={t.type} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0" }}>
-                  <span style={{ fontSize: 13, width: 108, color: C.ink, flexShrink: 0 }}>{t.type}</span>
-                  <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.seaSoft, overflow: "hidden" }}>
-                    <div style={{ width: `${t.pct}%`, height: "100%", background: C.sea }} />
-                  </div>
-                  <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 12, color: C.mute, width: 62, textAlign: "right", flexShrink: 0 }}>
-                    {t.n} · {t.pct}%
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {insights.foodInsightValido && (
-            <div style={{ background: C.mist, borderRadius: 12, padding: "11px 13px", fontSize: 13, color: C.ink }}>
-              {insights.melhorFood.emoji} <b>{insights.melhorFood.name.split(" ")[0]}</b> é seu ponto forte · {insights.piorFood.emoji} <b>{insights.piorFood.name.split(" ")[0]}</b> precisa de atenção
-            </div>
-          )}
-        </>
-      )}
-    </Card>
   );
 
   /* ═══ Registros ═══ */
@@ -940,8 +942,6 @@ export default function App() {
 
   const Registros = (
     <>
-      {InsightsCard}
-
       <Card title="Adicionar retroativo">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
           {[
@@ -1069,6 +1069,8 @@ export default function App() {
               <span style={{ color: e.hdl >= state.goals.hdlGoal ? C.sea : C.zone }}>HDL <b>{e.hdl}</b></span>
               <span>TG <b>{e.tg}</b></span>
               <span>LDL <b>{ldl != null ? `~${ldl}` : "n/c*"}</b></span>
+              {hasVal(e.apoB) && <span>ApoB <b>{e.apoB}</b></span>}
+              {hasVal(e.lpa) && <span>Lp(a) <b>{e.lpa}</b></span>}
             </div>
             {ldl == null && <div style={{ fontSize: 11, color: C.mute, marginTop: 4 }}>*TG ≥ 400: Friedewald não se aplica</div>}
             {e.note && <div style={{ fontSize: 13, color: C.mute, marginTop: 8, fontStyle: "italic" }}>"{e.note}"</div>}
@@ -1236,7 +1238,10 @@ export default function App() {
   }
 
   function ExameModal({ e }) {
-    const [f, setF] = useState(e ? { ...e } : { date: today, ct: "", hdl: "", tg: "", note: "" });
+    // apoB/lpa começam em "" tanto para exame novo quanto para um exame
+    // antigo que nunca teve esses campos (undefined) — o spread de "e" só
+    // sobrescreve o default quando o valor de fato existir no registro.
+    const [f, setF] = useState(e ? { apoB: "", lpa: "", ...e } : { date: today, ct: "", hdl: "", tg: "", apoB: "", lpa: "", note: "" });
     const ldl = ldlOf(f.ct, f.hdl, f.tg);
     return (
       <Modal title={e ? "Editar exame" : "Novo exame"} onClose={() => setModal(null)}>
@@ -1248,6 +1253,16 @@ export default function App() {
                 style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
             </Field>
           ))}
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Field label={<>ApoB <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0, color: C.mute }}>· Apolipoproteína B</span></>}>
+            <input type="number" step="0.1" inputMode="decimal" value={f.apoB} onChange={(ev) => setF({ ...f, apoB: ev.target.value })}
+              style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+          </Field>
+          <Field label={<>Lp(a) <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0, color: C.mute }}>· Lipoproteína(a)</span></>}>
+            <input type="number" step="0.1" inputMode="decimal" value={f.lpa} onChange={(ev) => setF({ ...f, lpa: ev.target.value })}
+              style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+          </Field>
         </div>
         <div style={{ background: C.mist, borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 14, color: C.ink }}>
           LDL calculado:{" "}
@@ -1262,7 +1277,14 @@ export default function App() {
         <PrimaryBtn onClick={() => {
           if (!f.ct || !f.hdl || f.tg === "") return;
           if (!confirmExam(f.ct, f.hdl, f.tg)) return;
+          if (!confirmRange("apoB", f.apoB)) return;
+          if (!confirmRange("lpa", f.lpa)) return;
           const rec = { ...f, ct: Number(f.ct), hdl: Number(f.hdl), tg: Number(f.tg), id: e ? e.id : String(Date.now()) };
+          // Nunca converta "" (não preenchido) para Number — daria 0, um
+          // valor espúrio e clinicamente enganoso. Campo vazio = ausente,
+          // então removemos a chave por completo em vez de gravar "".
+          if (f.apoB !== "") rec.apoB = Number(f.apoB); else delete rec.apoB;
+          if (f.lpa !== "") rec.lpa = Number(f.lpa); else delete rec.lpa;
           update({ ...state, exams: e ? state.exams.map((x) => (x.id === e.id ? rec : x)) : [...state.exams, rec] });
           setModal(null);
         }}>{e ? "Salvar alterações" : "Salvar exame"}</PrimaryBtn>
@@ -1277,7 +1299,7 @@ export default function App() {
     function exportJSON() { download("hdl-backup.json", JSON.stringify(state, null, 2), "application/json"); }
     function exportCSV() {
       const t = ["data,minutos,tipo,fc_media", ...state.workouts.map((w) => `${w.date},${w.minutes},${w.type},${w.avgHr || ""}`)].join("\n");
-      const e = ["data,ct,hdl,tg,ldl,nota", ...state.exams.map((x) => `${x.date},${x.ct},${x.hdl},${x.tg},${ldlOf(x.ct, x.hdl, x.tg) ?? ""},"${x.note || ""}"`)].join("\n");
+      const e = ["data,ct,hdl,tg,ldl,apob,lpa,nota", ...state.exams.map((x) => `${x.date},${x.ct},${x.hdl},${x.tg},${ldlOf(x.ct, x.hdl, x.tg) ?? ""},${hasVal(x.apoB) ? x.apoB : ""},${hasVal(x.lpa) ? x.lpa : ""},"${x.note || ""}"`)].join("\n");
       const d = ["data,peixe,castanhas,aveia,azeite,abacate", ...Object.entries(state.days).sort().map(([k, v]) => `${k},${v.fish || 0},${v.nuts || 0},${v.oats || 0},${v.olive || 0},${v.avocado || 0}`)].join("\n");
       const s = ["data,peso,fc_repouso", ...Object.entries(state.vitals).sort().map(([k, w]) => `${k},${w.weight || ""},${w.restHr || ""}`)].join("\n");
       download("treinos.csv", t, "text/csv");
@@ -1291,7 +1313,8 @@ export default function App() {
         "RESUMO — ACOMPANHAMENTO HDL",
         `Gerado em ${fmtBR(today)}`,
         "",
-        ex ? `Último exame (${fmtBR(ex.date)}): CT ${ex.ct} · HDL ${ex.hdl} · TG ${ex.tg} · LDL ~${ldlOf(ex.ct, ex.hdl, ex.tg) ?? "n/c"}` : "Sem exames registrados.",
+        ex ? `Último exame (${fmtBR(ex.date)}): CT ${ex.ct} · HDL ${ex.hdl} · TG ${ex.tg} · LDL ~${ldlOf(ex.ct, ex.hdl, ex.tg) ?? "n/c"}`
+          + `${hasVal(ex.apoB) ? ` · ApoB ${ex.apoB}` : ""}${hasVal(ex.lpa) ? ` · Lp(a) ${ex.lpa}` : ""}` : "Sem exames registrados.",
         `Meta de HDL: ${state.goals.hdlGoal}+ mg/dL`,
         "",
         `Exercício: média ${media12} min/semana em zona (${state.goals.zoneLow}–${state.goals.zoneHigh} bpm) · meta ${state.goals.minWeek} min`,
@@ -1374,20 +1397,20 @@ export default function App() {
 
   const NAV_ICONS = {
     home: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M3 11.5 12 4l9 7.5" />
         <path d="M5.5 10.5V19a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-8.5" />
         <path d="M9.5 20v-6h5v6" />
       </svg>
     ),
     trends: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <polyline points="4 16 10 10 14 13 20 6" />
         <polyline points="14 6 20 6 20 12" />
       </svg>
     ),
     log: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <line x1="9" y1="6" x2="20" y2="6" />
         <line x1="9" y1="12" x2="20" y2="12" />
         <line x1="9" y1="18" x2="20" y2="18" />
@@ -1397,7 +1420,7 @@ export default function App() {
       </svg>
     ),
     exams: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M12 3.5s6.5 7.7 6.5 12.3a6.5 6.5 0 0 1-13 0C5.5 11.2 12 3.5 12 3.5Z" />
       </svg>
     ),
@@ -1406,7 +1429,7 @@ export default function App() {
   const tabs = [["home", "Home"], ["trends", "Tendências"], ["log", "Registros"], ["exams", "Exames"]];
 
   return (
-    <div style={{ minHeight: "100vh", background: C.mist, fontFamily: "'IBM Plex Sans', sans-serif" }}>
+    <div style={{ minHeight: "100dvh", background: C.mist, fontFamily: "'IBM Plex Sans', sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
         button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid ${C.sea}; outline-offset: 2px; }
@@ -1415,7 +1438,7 @@ export default function App() {
         .nav-btn:active { filter: brightness(0.93); transform: scale(0.96); }
       `}</style>
 
-      <header style={{ maxWidth: 480, margin: "0 auto", padding: "18px 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <header style={{ maxWidth: 480, margin: "0 auto", padding: "calc(18px + env(safe-area-inset-top)) 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontFamily: "'Sora', sans-serif", fontWeight: 700, fontSize: 20, color: C.ink }}>HDL 40+</div>
           <div style={{ fontSize: 12, color: C.mute }}>Acompanhamento pessoal</div>
@@ -1424,26 +1447,35 @@ export default function App() {
           style={{ border: `1.5px solid ${C.line}`, background: "#fff", borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: "pointer" }}>⚙</button>
       </header>
 
-      <main style={{ maxWidth: 480, margin: "0 auto", padding: "10px 16px calc(110px + env(safe-area-inset-bottom))" }}>
+      <main style={{ maxWidth: 480, margin: "0 auto", padding: "10px 16px calc(116px + env(safe-area-inset-bottom))" }}>
         {tab === "home" && Home}
         {tab === "trends" && Trends}
         {tab === "log" && Registros}
         {tab === "exams" && Exams}
       </main>
 
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}` }}>
+      {/* Barra inferior — no Safari iOS a barra do navegador fica colada logo
+          abaixo desta nav; por isso o conteúdo (ícone+rótulo) é ancorado no
+          TOPO de cada botão (justifyContent flex-start), com respiro grande na
+          base (20px + safe-area) para afastar o alvo útil da faixa que o Safari
+          rouba. viewport-fit=cover (index.html) faz o env() valer no aparelho;
+          o fundo branco pinta contínuo até a borda física inferior. */}
+      <nav style={{
+        position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff",
+        borderTop: `1px solid ${C.line}`, boxShadow: "0 -3px 16px rgba(18,52,59,.07)",
+      }}>
         <div style={{ maxWidth: 480, margin: "0 auto", display: "flex" }}>
           {tabs.map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} className="nav-btn"
               aria-current={tab === id ? "page" : undefined}
               aria-label={label}
               style={{
-                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-                gap: 4, border: "none", cursor: "pointer", boxSizing: "border-box",
-                paddingTop: 12, paddingLeft: 4, paddingRight: 4,
-                paddingBottom: "calc(12px + env(safe-area-inset-bottom))",
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start",
+                gap: 5, border: "none", cursor: "pointer", boxSizing: "border-box",
+                minHeight: 76, paddingTop: 13, paddingLeft: 4, paddingRight: 4,
+                paddingBottom: "calc(22px + env(safe-area-inset-bottom))",
                 background: tab === id ? C.seaSoft : "transparent",
-                fontFamily: "'Sora', sans-serif", fontSize: 11,
+                fontFamily: "'Sora', sans-serif", fontSize: 12,
                 fontWeight: tab === id ? 700 : 500,
                 color: tab === id ? C.ink : C.mute,
                 borderTop: tab === id ? `3px solid ${C.sea}` : "3px solid transparent",
