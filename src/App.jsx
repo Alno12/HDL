@@ -1,18 +1,59 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 
-/* ─────────────────────────  Design tokens  ────────────────────── */
+/* ─────────────  Design tokens — linguagem Apple Saúde  ──────────── */
+/* Pilha do sistema: no iPhone renderiza SF Pro (a alma do visual iOS) e
+   elimina a dependência de rede para carregar fontes. */
+const SYS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 
 const C = {
-  mist: "#EEF2F1",
-  card: "#FFFFFF",
-  ink: "#12343B",
-  zone: "#E4572E",
-  zoneSoft: "#FBE3DB",
-  sea: "#3E7C85",
-  seaSoft: "#D8E6E7",
-  mute: "#6B7F82",
-  line: "#DDE7E6",
+  bg:    "#F2F2F7", // fundo agrupado
+  card:  "#FFFFFF", // cartão
+  ink:   "#1C1C1E", // rótulo primário (quase-preto)
+  mute:  "#8E8E93", // rótulo secundário
+  faint: "#AEAEB2", // terciário / dígito zerado (systemGray2 — 2.21:1, era #C7C7CC/1.68)
+  hair:  "#E5E5EA", // separadores / grade (hairline)
+  fill:  "#EFEFF4", // preenchimento interno (tiles, botões rápidos)
+
+  // Cores por categoria — VIVAS: só em preenchimentos (barras, gráficos,
+  // botões cheios com texto branco, ícones grandes).
+  activity: "#FF6B35", // Atividade / minutos em zona
+  heart:    "#FF2D55", // Coração / FC
+  body:     "#AF52DE", // Corpo / Peso (4.13:1 — serve também como texto)
+  food:     "#34C759", // Alimentação
+  exam:     "#30B0C7", // Exames / sangue
+  blue:     "#007AFF", // ação primária do sistema / configurações
+  danger:   "#FF3B30", // exclusão / zerar dados
+
+  // Variantes de TEXTO (mais escuras) — cor de categoria como rótulo sobre
+  // branco/fill. Verificadas ≥3:1 (padrão do próprio Apple Saúde).
+  activityTx: "#C6441A", // 4.95:1
+  foodTx:     "#248A3D", // 4.40:1
+  examTx:     "#0E7A8D", // 5.02:1
+  heartTx:    "#D91E52", // 4.93:1
 };
+
+// Cor de texto por categoria (usa a variante escura; `body` já passa vivo).
+const CTX = {
+  activity: C.activityTx, food: C.foodTx, exam: C.examTx,
+  heart: C.heartTx, body: C.body,
+};
+
+// Ícone pequeno de categoria (18px, stroke em currentColor) — usado no
+// cabeçalho dos cards e na tab bar para reforçar a cor de cada assunto.
+function CatIcon({ kind, size = 18 }) {
+  const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
+  if (kind === "activity") // cronômetro (minutos em zona)
+    return (<svg {...p}><circle cx="12" cy="13" r="8" /><path d="M12 13V9" /><path d="M9 2h6" /></svg>);
+  if (kind === "heart")
+    return (<svg {...p}><path d="M12 20s-7-4.5-9.5-9C1 8 2.5 4.5 6 4.5c2 0 3.2 1.3 4 2.5.8-1.2 2-2.5 4-2.5 3.5 0 5 3.5 3.5 6.5C19 15.5 12 20 12 20Z" /></svg>);
+  if (kind === "body") // balança (gauge)
+    return (<svg {...p}><rect x="3" y="4" width="18" height="16" rx="4" /><path d="M12 8v3l2.5 1.5" /></svg>);
+  if (kind === "food") // folha
+    return (<svg {...p}><path d="M4 20c8 2 15-4 15-13 0-1-.2-2-.5-3-9-1-14 4-14 10 0 2 .5 4 1.5 5Z" /><path d="M5 19c4-4 8-6 12-7" /></svg>);
+  if (kind === "exam") // gota (sangue)
+    return (<svg {...p}><path d="M12 3.5s6.5 7.7 6.5 12.3a6.5 6.5 0 0 1-13 0C5.5 11.2 12 3.5 12 3.5Z" /></svg>);
+  return null;
+}
 
 const KEY = "hdl-app-state-v3";
 const LETTERS = ["S", "T", "Q", "Q", "S", "S", "D"];
@@ -317,61 +358,76 @@ function confirmExam(ct, hdl, tg) {
 
 function Field({ label, children }) {
   return (
-    <label style={{ display: "block", marginBottom: 14, flex: 1 }}>
-      <span style={{ fontSize: 12, letterSpacing: ".06em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>{label}</span>
+    <label style={{ display: "block", marginBottom: 16, flex: 1 }}>
+      <span style={{ fontSize: 13, color: C.mute, fontWeight: 600 }}>{label}</span>
       <div style={{ marginTop: 6 }}>{children}</div>
     </label>
   );
 }
 const inputStyle = {
-  width: "100%", padding: "10px 12px", fontSize: 16,
-  border: `1.5px solid ${C.line}`, borderRadius: 10,
-  fontFamily: "'IBM Plex Sans', sans-serif", color: C.ink,
-  background: "#fff", boxSizing: "border-box",
+  width: "100%", padding: "12px 14px", fontSize: 17,
+  border: "none", borderRadius: 12,
+  fontFamily: SYS, color: C.ink,
+  background: C.fill, boxSizing: "border-box",
 };
 function Modal({ title, onClose, children }) {
+  // Sheet iOS: alça (grabber), cantos superiores 20px, título grande à
+  // esquerda + botão fechar circular discreto.
   return (
     <div onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(18,52,59,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 50 }}>
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 50 }}>
       <div onClick={(e) => e.stopPropagation()}
-        style={{ background: "#fff", borderRadius: "18px 18px 0 0", padding: "20px 20px 28px", width: "100%", maxWidth: 480, maxHeight: "88vh", overflowY: "auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h2 style={{ fontFamily: "'Sora', sans-serif", fontSize: 18, margin: 0, color: C.ink }}>{title}</h2>
+        style={{ background: C.card, borderRadius: "20px 20px 0 0", padding: "8px 20px calc(24px + env(safe-area-inset-bottom))", width: "100%", maxWidth: 480, maxHeight: "92vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: "2px 0 12px" }}>
+          <div style={{ width: 36, height: 5, borderRadius: 3, background: C.hair }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <h2 style={{ fontFamily: SYS, fontSize: 22, fontWeight: 700, margin: 0, color: C.ink, letterSpacing: "-0.01em" }}>{title}</h2>
           <button onClick={onClose} aria-label="Fechar"
-            style={{ border: "none", background: "none", fontSize: 22, cursor: "pointer", color: C.mute }}>×</button>
+            style={{ border: "none", background: C.fill, width: 30, height: 30, borderRadius: 15, fontSize: 17, lineHeight: 1, cursor: "pointer", color: C.mute, display: "grid", placeItems: "center" }}>×</button>
         </div>
         {children}
       </div>
     </div>
   );
 }
-function PrimaryBtn({ children, onClick, tone = C.ink }) {
+function PrimaryBtn({ children, onClick, tone = C.blue }) {
   return (
     <button onClick={onClick}
-      style={{ width: "100%", padding: "13px 16px", borderRadius: 12, border: "none", background: tone, color: "#fff", fontSize: 16, fontWeight: 600, fontFamily: "'Sora', sans-serif", cursor: "pointer" }}>
+      style={{ width: "100%", padding: "15px 16px", minHeight: 50, borderRadius: 12, border: "none", background: tone, color: "#fff", fontSize: 17, fontWeight: 600, fontFamily: SYS, cursor: "pointer", WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}>
       {children}
     </button>
   );
 }
-function Card({ title, right, children }) {
+// Cabeçalho de card estilo Apple Saúde: ícone + rótulo da categoria na cor
+// da categoria + elemento à direita (timestamp/chevron). `cat` recebe uma
+// das chaves de categoria (activity/heart/body/food/exam) para colorir.
+function CardHead({ cat, tint, label, right }) {
+  const color = tint || CTX[cat] || C[cat] || C.mute;
   return (
-    <section style={{ background: C.card, borderRadius: 16, padding: 18, marginBottom: 14, boxShadow: "0 1px 3px rgba(18,52,59,.06)" }}>
-      {(title || right) && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
-          {title && <h3 style={{ margin: 0, fontSize: 12, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 700 }}>{title}</h3>}
-          {right}
-        </div>
-      )}
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, color, minWidth: 0 }}>
+        {cat && <CatIcon kind={cat} size={17} />}
+        <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      </div>
+      {right && <span style={{ fontSize: 13, color: C.mute, flexShrink: 0, marginLeft: 8 }}>{right}</span>}
+    </div>
+  );
+}
+function Card({ title, right, cat, tint, children }) {
+  return (
+    <section style={{ background: C.card, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+      {(title || right) && <CardHead cat={cat} tint={tint} label={title} right={right} />}
       {children}
     </section>
   );
 }
-function SmallBtn({ children, onClick, tone = C.mute }) {
+function SmallBtn({ children, onClick, tone = C.blue }) {
   return (
     <button onClick={onClick}
       style={{
-        border: `1px solid ${C.line}`, background: "#fff", color: tone, borderRadius: 10,
-        padding: "11px 14px", minHeight: 44, fontSize: 13, cursor: "pointer", fontWeight: 600,
+        border: "none", background: C.fill, color: tone, borderRadius: 9,
+        padding: "9px 14px", minHeight: 44, fontSize: 15, cursor: "pointer", fontWeight: 500,
         display: "inline-flex", alignItems: "center", justifyContent: "center",
         WebkitTapHighlightColor: "transparent", touchAction: "manipulation",
       }}>
@@ -383,24 +439,19 @@ function SmallBtn({ children, onClick, tone = C.mute }) {
 /* ─────────────────  Barra de zona (assinatura)  ─────────────────── */
 
 function ZoneBar({ minutes, goal }) {
-  const segs = Math.max(1, Math.round(goal / 10));
-  const filled = Math.min(segs, Math.floor((minutes / goal) * segs));
+  const pct = Math.min(1, goal > 0 ? minutes / goal : 0);
+  const hit = minutes >= goal;
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-        <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 52, fontWeight: 700, color: C.ink, lineHeight: 1 }}>{minutes}</span>
-        <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 20, color: C.mute }}>/ {goal} min</span>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={{ fontFamily: SYS, fontSize: 52, fontWeight: 700, color: C.ink, lineHeight: 1, letterSpacing: "-0.02em" }}>{minutes}</span>
+        <span style={{ fontFamily: SYS, fontSize: 17, color: C.mute, fontWeight: 500 }}>/ {goal} min em zona</span>
       </div>
-      <div style={{ display: "flex", gap: 4, marginTop: 12 }}>
-        {Array.from({ length: segs }).map((_, i) => {
-          const on = i < filled;
-          const t = segs > 1 ? i / (segs - 1) : 0;
-          const bg = on ? `color-mix(in srgb, ${C.sea} ${100 - t * 70}%, ${C.zone} ${t * 70}%)` : C.seaSoft;
-          return <div key={i} style={{ flex: 1, height: 13, borderRadius: 4, background: bg }} />;
-        })}
+      <div style={{ height: 12, borderRadius: 6, background: C.fill, marginTop: 14, overflow: "hidden" }}>
+        <div style={{ width: `${pct * 100}%`, height: "100%", borderRadius: 6, background: C.activity, transition: "width .3s ease" }} />
       </div>
-      <div style={{ fontSize: 12, color: C.mute, marginTop: 6 }}>
-        {minutes >= goal ? "Meta da semana atingida ✓" : `Faltam ${goal - minutes} min em zona`}
+      <div style={{ fontSize: 13, color: hit ? C.foodTx : C.mute, marginTop: 8, fontWeight: hit ? 600 : 400 }}>
+        {hit ? "Meta da semana atingida ✓" : `Faltam ${goal - minutes} min em zona`}
       </div>
     </div>
   );
@@ -416,18 +467,18 @@ function WeekStrip({ workouts, monday }) {
   });
   const maxMin = Math.max(45, ...dayData.map((d) => d.min));
   return (
-    <div style={{ display: "flex", gap: 6, marginTop: 16 }}>
+    <div style={{ display: "flex", gap: 6, marginTop: 18 }}>
       {dayData.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, opacity: d.future ? 0.4 : 1 }}>
-          <span style={{ fontSize: 9, fontFamily: "'Sora', sans-serif", color: d.min > 0 ? C.ink : "transparent" }}>{d.min || "0"}</span>
-          <div style={{ height: 38, width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-            <div style={{ width: "70%", borderRadius: 4, height: d.min > 0 ? Math.max(5, (d.min / maxMin) * 38) : 3, background: d.min > 0 ? C.sea : C.line }} />
+        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, opacity: d.future ? 0.4 : 1 }}>
+          <span style={{ fontSize: 10, fontFamily: SYS, fontWeight: 600, color: d.min > 0 ? C.ink : "transparent" }}>{d.min || "0"}</span>
+          <div style={{ height: 40, width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+            <div style={{ width: "68%", borderRadius: 4, height: d.min > 0 ? Math.max(6, (d.min / maxMin) * 40) : 3, background: d.min > 0 ? C.activity : C.hair }} />
           </div>
           <span style={{
-            fontSize: 10, fontFamily: "'Sora', sans-serif",
-            fontWeight: d.isToday ? 700 : 400, color: d.isToday ? "#fff" : C.mute,
-            background: d.isToday ? C.zone : "transparent",
-            borderRadius: 6, padding: "1px 5px",
+            fontSize: 11, fontFamily: SYS,
+            fontWeight: d.isToday ? 700 : 500, color: d.isToday ? "#fff" : C.mute,
+            background: d.isToday ? C.activity : "transparent",
+            borderRadius: 8, minWidth: 18, textAlign: "center", padding: "1px 5px", lineHeight: "16px",
           }}>{LETTERS[i]}</span>
         </div>
       ))}
@@ -443,24 +494,25 @@ function FoodRow({ food, monday, days, weekGoal, onSetDay }) {
   const weekTotal = foodWeekTotal(days, monday, food.key);
   const done = weekTotal >= weekGoal;
   const btn = {
-    width: 38, height: 38, borderRadius: 11, fontSize: 20, cursor: "pointer",
-    fontFamily: "'Sora', sans-serif", fontWeight: 600, border: `1.5px solid ${C.line}`,
-    background: "#fff", color: C.ink,
+    width: 40, height: 40, borderRadius: 20, fontSize: 22, cursor: "pointer",
+    fontFamily: SYS, fontWeight: 400, border: "none",
+    background: C.fill, color: C.foodTx, display: "grid", placeItems: "center",
+    WebkitTapHighlightColor: "transparent", touchAction: "manipulation",
   };
   return (
-    <div style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+    <div style={{ padding: "12px 0", borderBottom: `0.5px solid ${C.hair}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>{food.emoji} {food.name}</div>
+          <div style={{ fontSize: 16, fontWeight: 500, color: C.ink }}>{food.emoji} {food.name}</div>
           <div style={{ fontSize: 12, color: C.mute, marginTop: 2 }}>{food.portion}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 9, flexShrink: 0 }}>
           <button aria-label={`Remover porção de hoje`} style={{ ...btn, opacity: countToday === 0 ? 0.35 : 1 }}
             onClick={() => onSetDay(today, Math.max(0, countToday - 1))}>−</button>
-          <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 19, fontWeight: 700, width: 20, textAlign: "center", color: countToday > 0 ? C.ink : C.mute }}>
+          <span style={{ fontFamily: SYS, fontSize: 20, fontWeight: 700, width: 20, textAlign: "center", color: countToday > 0 ? C.ink : C.faint }}>
             {countToday}
           </span>
-          <button aria-label={`Adicionar porção hoje`} style={{ ...btn, background: C.ink, color: "#fff", border: "none" }}
+          <button aria-label={`Adicionar porção hoje`} style={{ ...btn, background: C.food, color: "#fff" }}
             onClick={() => onSetDay(today, countToday + 1)}>+</button>
         </div>
       </div>
@@ -476,10 +528,10 @@ function FoodRow({ food, monday, days, weekGoal, onSetDay }) {
                 aria-label={`${L}: ${c} porções — toque para ajustar`}
                 onClick={() => onSetDay(date, (c + 1) % 3)}
                 style={{
-                  flex: 1, height: 26, borderRadius: 7, cursor: future ? "default" : "pointer",
-                  fontFamily: "'Sora', sans-serif", fontSize: 11, fontWeight: 600,
-                  border: isToday ? `1.5px solid ${C.zone}` : `1.5px solid ${c > 0 ? "transparent" : C.line}`,
-                  background: c >= 2 ? C.ink : c === 1 ? C.sea : "#fff",
+                  flex: 1, height: 28, borderRadius: 8, cursor: future ? "default" : "pointer",
+                  fontFamily: SYS, fontSize: 11, fontWeight: 600,
+                  border: isToday ? `1.5px solid ${C.food}` : "none",
+                  background: c >= 2 ? C.food : c === 1 ? `color-mix(in srgb, ${C.food} 55%, #fff)` : C.fill,
                   color: c > 0 ? "#fff" : C.mute,
                   opacity: future ? 0.35 : 1,
                 }}>
@@ -488,7 +540,7 @@ function FoodRow({ food, monday, days, weekGoal, onSetDay }) {
             );
           })}
         </div>
-        <span style={{ fontSize: 12, fontFamily: "'Sora', sans-serif", color: done ? C.sea : C.mute, fontWeight: done ? 700 : 400, width: 46, textAlign: "right" }}>
+        <span style={{ fontSize: 13, fontFamily: SYS, color: done ? C.foodTx : C.mute, fontWeight: done ? 700 : 500, width: 46, textAlign: "right" }}>
           {weekTotal}/{weekGoal}{done ? " ✓" : ""}
         </span>
       </div>
@@ -498,23 +550,27 @@ function FoodRow({ food, monday, days, weekGoal, onSetDay }) {
 
 /* ─────────────────────────  Gráficos  ──────────────────────────── */
 
-function Bars({ data, goal, labels, ma }) {
+function Bars({ data, goal, labels, ma, color = C.activity }) {
   const W = 320, H = 120, pad = 4;
   const max = Math.max(goal, ...data, 1) * 1.12;
   const bw = (W - pad * 2) / data.length;
   const gy = H - (goal / max) * H;
+  const soft = `color-mix(in srgb, ${color} 22%, #fff)`;
   const maPts = ma
     ? ma.map((v, i) => (v == null ? null : `${pad + i * bw + bw / 2},${H - (v / max) * H}`)).filter(Boolean).join(" ")
     : null;
   return (
     <svg viewBox={`0 0 ${W} ${H + 16}`} style={{ width: "100%" }}>
+      {[0.33, 0.66].map((t) => (
+        <line key={t} x1="0" x2={W} y1={H * t} y2={H * t} stroke={C.hair} strokeWidth="0.5" />
+      ))}
       {data.map((v, i) => {
         const h = (v / max) * H;
-        return <rect key={i} x={pad + i * bw + 2} y={H - h} width={bw - 4} height={Math.max(h, 1)} rx="3" fill={v >= goal ? C.sea : C.seaSoft} />;
+        return <rect key={i} x={pad + i * bw + 2.5} y={H - h} width={bw - 5} height={Math.max(h, 1)} rx="3" fill={v >= goal ? color : soft} />;
       })}
-      <line x1="0" x2={W} y1={gy} y2={gy} stroke={C.zone} strokeWidth="1.5" strokeDasharray="5 4" />
-      <text x={W - 2} y={gy - 4} textAnchor="end" fontSize="10" fill={C.zone}>meta {goal}</text>
-      {maPts && <polyline points={maPts} fill="none" stroke={C.ink} strokeWidth="2" strokeLinecap="round" opacity="0.75" />}
+      <line x1="0" x2={W} y1={gy} y2={gy} stroke={C.mute} strokeWidth="1" strokeDasharray="4 4" />
+      <text x={W - 2} y={gy - 4} textAnchor="end" fontSize="10" fill={C.mute}>meta {goal}</text>
+      {maPts && <polyline points={maPts} fill="none" stroke={C.ink} strokeWidth="2" strokeLinecap="round" opacity="0.65" />}
       {labels.map((l, i) => i % 3 === 0 ? (
         <text key={i} x={pad + i * bw + bw / 2} y={H + 12} textAnchor="middle" fontSize="8.5" fill={C.mute}>{l}</text>
       ) : null)}
@@ -538,20 +594,20 @@ function Line({ points, goal, unit, color = C.ink, band }) {
     <svg viewBox={`0 0 ${W} ${H + 14}`} style={{ width: "100%" }}>
       {band && (
         <>
-          <rect x="0" y={y(band[1])} width={W} height={Math.max(2, y(band[0]) - y(band[1]))} fill={C.zoneSoft} opacity="0.7" />
-          <text x={W - 2} y={y(band[1]) + 10} textAnchor="end" fontSize="9" fill={C.zone}>zona {band[0]}–{band[1]}</text>
+          <rect x="0" y={y(band[1])} width={W} height={Math.max(2, y(band[0]) - y(band[1]))} fill={color} opacity="0.12" />
+          <text x={W - 2} y={y(band[1]) + 10} textAnchor="end" fontSize="9" fill={color}>zona {band[0]}–{band[1]}</text>
         </>
       )}
       {[0.25, 0.5, 0.75].map((t) => (
-        <line key={t} x1="0" x2={W} y1={padY + t * (H - padY * 2)} y2={padY + t * (H - padY * 2)} stroke={C.line} strokeWidth="0.5" />
+        <line key={t} x1="0" x2={W} y1={padY + t * (H - padY * 2)} y2={padY + t * (H - padY * 2)} stroke={C.hair} strokeWidth="0.5" />
       ))}
       {goal != null && (
         <>
-          <line x1="0" x2={W} y1={y(goal)} y2={y(goal)} stroke={C.zone} strokeWidth="1.5" strokeDasharray="5 4" />
-          <text x={W - 2} y={y(goal) - 4} textAnchor="end" fontSize="10" fill={C.zone}>meta {goal}</text>
+          <line x1="0" x2={W} y1={y(goal)} y2={y(goal)} stroke={C.mute} strokeWidth="1" strokeDasharray="4 4" />
+          <text x={W - 2} y={y(goal) - 4} textAnchor="end" fontSize="10" fill={C.mute}>meta {goal}</text>
         </>
       )}
-      <path d={area} fill={color} opacity="0.07" />
+      <path d={area} fill={color} opacity="0.1" />
       <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
       {points.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.v)} r="3.2" fill={color} />)}
       {points.map((p, i) => (points.length <= 8 || i % 2 === 0 || i === points.length - 1) ? (
@@ -573,10 +629,10 @@ const Empty = ({ children }) => (
 
 function Stat({ label, value, sub, tone }) {
   return (
-    <div style={{ background: C.mist, borderRadius: 12, padding: "11px 13px" }}>
-      <div style={{ fontSize: 10.5, letterSpacing: ".05em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>{label}</div>
-      <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 22, fontWeight: 700, color: tone || C.ink, marginTop: 2 }}>{value}</div>
-      {sub && <div style={{ fontSize: 10.5, color: C.mute, marginTop: 2 }}>{sub}</div>}
+    <div style={{ background: C.fill, borderRadius: 12, padding: "12px 13px" }}>
+      <div style={{ fontSize: 12, color: C.mute, fontWeight: 500 }}>{label}</div>
+      <div style={{ fontFamily: SYS, fontSize: 23, fontWeight: 700, color: tone || C.ink, marginTop: 3, letterSpacing: "-0.01em" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -691,7 +747,7 @@ export default function App() {
   }, [state]);
 
   if (!state)
-    return <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", background: C.mist, color: C.mute, fontFamily: "'IBM Plex Sans', sans-serif" }}>Carregando…</div>;
+    return <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", background: C.bg, color: C.mute, fontFamily: SYS }}>Carregando…</div>;
 
   const today = todayStr();
   const monday = mondayOf(today);
@@ -775,19 +831,19 @@ export default function App() {
 
   const Home = (
     <>
-      <Card title={`Semana · ${weekLabel(monday)}`}>
+      <Card cat="activity" title="Atividade" right={weekLabel(monday)}>
         <ZoneBar minutes={minutes} goal={state.goals.minWeek} />
         <WeekStrip workouts={state.workouts} monday={monday} />
-        <div style={{ marginTop: 14 }}>
-          <PrimaryBtn onClick={() => setModal({ kind: "treino" })}>+ Registrar treino</PrimaryBtn>
+        <div style={{ marginTop: 16 }}>
+          <PrimaryBtn tone={C.activity} onClick={() => setModal({ kind: "treino" })}>Registrar treino</PrimaryBtn>
         </div>
-        <div style={{ fontSize: 12, color: C.mute, marginTop: 8, textAlign: "center" }}>
+        <div style={{ fontSize: 12, color: C.mute, marginTop: 10, textAlign: "center" }}>
           Zona alvo: {state.goals.zoneLow}–{state.goals.zoneHigh} bpm
         </div>
       </Card>
 
-      <Card title="Alimentação"
-        right={<span style={{ fontSize: 11, color: C.mute }}>toque nos dias para ajustar</span>}>
+      <Card cat="food" title="Alimentação"
+        right="toque nos dias para ajustar">
         {FOODS.map((f) => (
           <FoodRow key={f.key} food={f} monday={monday} days={state.days}
             weekGoal={state.goals[f.key]}
@@ -795,10 +851,10 @@ export default function App() {
         ))}
       </Card>
 
-      <Card title="Medidas de hoje">
+      <Card tint={C.mute} title="Medidas de hoje">
         <div style={{ display: "flex", gap: 12 }}>
           <label style={{ flex: 1 }}>
-            <span style={{ fontSize: 12, color: C.mute }}>Peso (kg)</span>
+            <span style={{ fontSize: 13, color: C.body, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><CatIcon kind="body" size={15} /> Peso (kg)</span>
             <input type="number" step="0.1" inputMode="decimal" value={todayVitals.weight ?? ""}
               onFocus={(e) => { weightFocusRef.current = e.target.value; }}
               onChange={(e) => setVitalVal(today, { weight: e.target.value })}
@@ -808,10 +864,10 @@ export default function App() {
                 const ok = confirmRange("weight", val) && confirmWeightJump(state.vitals, today, val);
                 if (!ok) setVitalVal(today, { weight: weightFocusRef.current });
               }}
-              style={{ ...inputStyle, marginTop: 4, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+              style={{ ...inputStyle, marginTop: 6, fontFamily: SYS }} placeholder="—" />
           </label>
           <label style={{ flex: 1 }}>
-            <span style={{ fontSize: 12, color: C.mute }}>FC repouso (bpm)</span>
+            <span style={{ fontSize: 13, color: C.heartTx, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><CatIcon kind="heart" size={15} /> FC repouso (bpm)</span>
             <input type="number" inputMode="numeric" value={todayVitals.restHr ?? ""}
               onFocus={(e) => { hrFocusRef.current = e.target.value; }}
               onChange={(e) => setVitalVal(today, { restHr: e.target.value })}
@@ -820,10 +876,10 @@ export default function App() {
                 if (val === "" || val === hrFocusRef.current) return;
                 if (!confirmRange("restHr", val)) setVitalVal(today, { restHr: hrFocusRef.current });
               }}
-              style={{ ...inputStyle, marginTop: 4, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+              style={{ ...inputStyle, marginTop: 6, fontFamily: SYS }} placeholder="—" />
           </label>
         </div>
-        <div style={{ fontSize: 11, color: C.mute, marginTop: 8 }}>Registro diário — anote todos os dias, de preferência ao acordar.</div>
+        <div style={{ fontSize: 12, color: C.mute, marginTop: 10 }}>Registro diário — anote todos os dias, de preferência ao acordar.</div>
       </Card>
     </>
   );
@@ -832,7 +888,7 @@ export default function App() {
 
   const Trends = (
     <>
-      <Card title="Resumo · 12 semanas">
+      <Card cat="activity" title="Atividade · 12 semanas">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
           <Stat label="Média / semana" value={`${media12} min`} sub={`últimas 4: ${media4} min`} />
           <Stat label="Semanas na meta" value={`${weeksOnGoal}/12`} sub={`meta ${state.goals.minWeek} min`} />
@@ -841,7 +897,7 @@ export default function App() {
           <Stat label="Total no mês" value={`${totalMonth} min`} sub={`${monthWk.length} treinos em ${MESES[Number(curMonth.slice(5)) - 1]}`} />
           <Stat label="FC na zona" value={insights.pctZone != null ? `${insights.pctZone}%` : "—"}
             sub={insights.pctZone != null ? `${insights.hrWorkoutsCount} treino${insights.hrWorkoutsCount > 1 ? "s" : ""} com FC média` : "anote a FC média do treino"}
-            tone={insights.pctZone != null && insights.pctZone >= 70 ? C.sea : undefined} />
+            tone={insights.pctZone != null && insights.pctZone >= 70 ? C.activityTx : undefined} />
           <Stat label="Dia mais treinado" value={insights.bestWd >= 0 ? WEEKDAY_CAP[insights.bestWd] : "—"}
             sub={insights.bestWd >= 0 ? `${insights.bestWdCount}× nas últimas 12 sem` : "sem treinos ainda"} />
           <Stat label="Duração média" value={insights.avgDuration != null ? `${insights.avgDuration} min` : "—"}
@@ -849,42 +905,42 @@ export default function App() {
         </div>
       </Card>
 
-      <Card title="Constância e corpo">
+      <Card cat="body" title="Constância e corpo">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
           <Stat label="Sequência de peso"
             value={insights.weightStreak > 0 ? `${insights.weightStreak} dia${insights.weightStreak > 1 ? "s" : ""}` : "—"}
             sub={insights.weightStreakBest > 0 ? `recorde: ${insights.weightStreakBest} dia${insights.weightStreakBest > 1 ? "s" : ""}` : "registre o peso hoje"}
-            tone={insights.weightStreak >= 7 ? C.sea : undefined} />
+            tone={insights.weightStreak >= 7 ? C.body : undefined} />
           <Stat label="Constância · 30 dias" value={insights.empty ? "—" : `${insights.pct30}%`} sub="dias com algum registro"
-            tone={!insights.empty && insights.pct30 >= 80 ? C.sea : undefined} />
-          <Stat label="Δ FC repouso" value={fmtDelta(dRest, "bpm")} sub="4 sem vs 4 anteriores" tone={dRest != null && dRest < 0 ? C.sea : undefined} />
-          <Stat label="Δ Peso · 4 sem" value={fmtDelta(dWt, "kg")} sub="4 sem vs 4 anteriores" tone={dWt != null && dWt < 0 ? C.sea : undefined} />
+            tone={!insights.empty && insights.pct30 >= 80 ? C.activityTx : undefined} />
+          <Stat label="Δ FC repouso" value={fmtDelta(dRest, "bpm")} sub="4 sem vs 4 anteriores" tone={dRest != null && dRest < 0 ? C.heartTx : undefined} />
+          <Stat label="Δ Peso · 4 sem" value={fmtDelta(dWt, "kg")} sub="4 sem vs 4 anteriores" tone={dWt != null && dWt < 0 ? C.body : undefined} />
           <Stat label="Peso · 30 dias"
             value={insights.deltaWeight30 != null ? `${insights.deltaWeight30 > 0 ? "+" : ""}${insights.deltaWeight30.toFixed(1)} kg` : "—"}
             sub="primeiro vs. último registro"
-            tone={insights.deltaWeight30 != null && insights.deltaWeight30 < 0 ? C.sea : undefined} />
+            tone={insights.deltaWeight30 != null && insights.deltaWeight30 < 0 ? C.body : undefined} />
           <Stat label={`Sequência · ${insights.topGoalFood.name.split(" ")[0]}`}
             value={insights.topFoodSetSize > 0 ? `${insights.topFoodStreak} dia${insights.topFoodStreak !== 1 ? "s" : ""}` : "—"}
             sub={`${insights.topGoalFood.emoji} dias seguidos com registro`} />
         </div>
       </Card>
 
-      <Card title="Minutos em zona · 12 semanas"
-        right={<span style={{ fontSize: 11, color: C.mute }}>linha = média móvel 4 sem</span>}>
+      <Card cat="activity" title="Minutos em zona · 12 sem"
+        right="média móvel 4 sem">
         {minsSeries.some((v) => v > 0)
-          ? <Bars data={minsSeries} goal={state.goals.minWeek} labels={wLabels} ma={maSeries} />
+          ? <Bars data={minsSeries} goal={state.goals.minWeek} labels={wLabels} ma={maSeries} color={C.activity} />
           : <Empty>Registre treinos para ver a evolução aqui.</Empty>}
       </Card>
 
-      <Card title="Treinos por tipo · 12 semanas">
+      <Card cat="activity" title="Treinos por tipo · 12 sem">
         {insights.typeDist && insights.typeDist.length > 0 ? (
           insights.typeDist.map((t) => (
             <div key={t.type} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0" }}>
               <span style={{ fontSize: 13, width: 108, color: C.ink, flexShrink: 0 }}>{t.type}</span>
-              <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.seaSoft, overflow: "hidden" }}>
-                <div style={{ width: `${t.pct}%`, height: "100%", background: C.sea }} />
+              <div style={{ flex: 1, height: 8, borderRadius: 4, background: `color-mix(in srgb, ${C.activity} 18%, #fff)`, overflow: "hidden" }}>
+                <div style={{ width: `${t.pct}%`, height: "100%", background: C.activity }} />
               </div>
-              <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 12, color: C.mute, width: 62, textAlign: "right", flexShrink: 0 }}>
+              <span style={{ fontFamily: SYS, fontSize: 12, color: C.mute, width: 62, textAlign: "right", flexShrink: 0 }}>
                 {t.n} · {t.pct}%
               </span>
             </div>
@@ -894,38 +950,38 @@ export default function App() {
         )}
       </Card>
 
-      <Card title="FC média dos treinos"
-        right={<span style={{ fontSize: 11, color: C.mute }}>faixa = sua zona alvo</span>}>
+      <Card cat="heart" title="FC média dos treinos"
+        right="faixa = zona alvo">
         {hrSeries.length >= 2
-          ? <Line points={hrSeries} color={C.ink} band={[state.goals.zoneLow, state.goals.zoneHigh]} />
+          ? <Line points={hrSeries} color={C.heart} band={[state.goals.zoneLow, state.goals.zoneHigh]} />
           : <Empty>Anote a FC média nos treinos para ver se está caindo na zona.</Empty>}
       </Card>
 
-      <Card title="Adesão alimentar · média 4 semanas">
+      <Card cat="food" title="Adesão alimentar · 4 sem">
         {foodAdesao.map((f) => (
           <div key={f.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}>
             <span style={{ fontSize: 14, width: 112, color: C.ink }}>{f.emoji} {f.name.split(" ")[0]}</span>
-            <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.seaSoft, overflow: "hidden" }}>
-              <div style={{ width: `${f.pct}%`, height: "100%", background: f.pct >= 100 ? C.sea : `color-mix(in srgb, ${C.sea} 65%, ${C.seaSoft} 35%)` }} />
+            <div style={{ flex: 1, height: 8, borderRadius: 4, background: `color-mix(in srgb, ${C.food} 18%, #fff)`, overflow: "hidden" }}>
+              <div style={{ width: `${f.pct}%`, height: "100%", background: f.pct >= 100 ? C.food : `color-mix(in srgb, ${C.food} 60%, #fff)` }} />
             </div>
-            <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 12, color: C.mute, width: 76, textAlign: "right" }}>
+            <span style={{ fontFamily: SYS, fontSize: 12, color: C.mute, width: 76, textAlign: "right" }}>
               {f.avg.toFixed(1)}/{state.goals[f.key]} · {f.pct}%
             </span>
           </div>
         ))}
         {foodInsightValido && (
-          <div style={{ background: C.mist, borderRadius: 12, padding: "11px 13px", fontSize: 13, color: C.ink, marginTop: 10 }}>
+          <div style={{ background: C.fill, borderRadius: 12, padding: "11px 13px", fontSize: 13, color: C.ink, marginTop: 10 }}>
             {melhorFood.emoji} <b>{melhorFood.name.split(" ")[0]}</b> é seu ponto forte · {piorFood.emoji} <b>{piorFood.name.split(" ")[0]}</b> precisa de atenção
           </div>
         )}
       </Card>
 
-      <Card title="FC de repouso · semanal">
-        {restSeries.length >= 2 ? <Line points={restSeries} color={C.zone} /> : <Empty>Anote a FC de repouso semanal na Home.</Empty>}
+      <Card cat="heart" title="FC de repouso · semanal">
+        {restSeries.length >= 2 ? <Line points={restSeries} color={C.heart} /> : <Empty>Anote a FC de repouso semanal na Home.</Empty>}
       </Card>
 
-      <Card title="Peso · semanal">
-        {wtSeries.length >= 2 ? <Line points={wtSeries} goal={Number(state.goals.weightGoal) || null} /> : <Empty>Anote o peso semanal na Home.</Empty>}
+      <Card cat="body" title="Peso · semanal">
+        {wtSeries.length >= 2 ? <Line points={wtSeries} goal={Number(state.goals.weightGoal) || null} color={C.body} /> : <Empty>Anote o peso semanal na Home.</Empty>}
       </Card>
     </>
   );
@@ -942,46 +998,46 @@ export default function App() {
 
   const Registros = (
     <>
-      <Card title="Adicionar retroativo">
+      <Card tint={C.mute} title="Adicionar retroativo">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
           {[
-            ["Treino", () => setModal({ kind: "treino" })],
-            ["Alimentação", () => setModal({ kind: "dia", date: today })],
-            ["Medidas", () => setModal({ kind: "vitals", date: today })],
-          ].map(([l, fn]) => (
+            ["Treino", "activity", () => setModal({ kind: "treino" })],
+            ["Alimentação", "food", () => setModal({ kind: "dia", date: today })],
+            ["Medidas", "body", () => setModal({ kind: "vitals", date: today })],
+          ].map(([l, cat, fn]) => (
             <button key={l} onClick={fn}
-              style={{ padding: "12px 4px", borderRadius: 12, border: `1.5px solid ${C.line}`, background: "#fff", fontFamily: "'Sora', sans-serif", fontWeight: 600, fontSize: 13, color: C.ink, cursor: "pointer" }}>
-              + {l}
+              style={{ padding: "13px 4px", minHeight: 48, borderRadius: 12, border: "none", background: C.fill, fontFamily: SYS, fontWeight: 600, fontSize: 13, color: CTX[cat] || C[cat], cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, WebkitTapHighlightColor: "transparent" }}>
+              <CatIcon kind={cat} size={18} />{l}
             </button>
           ))}
         </div>
-        <div style={{ fontSize: 11, color: C.mute, marginTop: 8 }}>Todos permitem escolher a data — inclusive dias e semanas passadas.</div>
+        <div style={{ fontSize: 12, color: C.mute, marginTop: 10 }}>Todos permitem escolher a data — inclusive dias e semanas passadas.</div>
       </Card>
 
-      <Card title={`Treinos · ${workoutsSorted.length}`}>
+      <Card cat="activity" title={`Treinos · ${workoutsSorted.length}`}>
         {workoutsSorted.length === 0 && <Empty>Nenhum treino registrado.</Empty>}
         {workoutsSorted.slice(0, 20).map((w) => (
-          <div key={w.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
+          <div key={w.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.hair}` }}>
             <div>
-              <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 14, fontWeight: 600, color: C.ink }}>
+              <div style={{ fontFamily: SYS, fontSize: 14, fontWeight: 600, color: C.ink }}>
                 {fmtBR(w.date)} <span style={{ color: C.mute, fontWeight: 400 }}>· {weekdayShort(w.date)}</span>
               </div>
               <div style={{ fontSize: 12, color: C.mute }}>{w.type} · {w.minutes} min{w.avgHr ? ` · FC ${w.avgHr}` : ""}</div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <SmallBtn onClick={() => setModal({ kind: "treino", w })}>editar</SmallBtn>
-              <SmallBtn tone={C.zone} onClick={() => { if (confirm("Excluir este treino?")) update({ ...state, workouts: state.workouts.filter((x) => x.id !== w.id) }); }}>excluir</SmallBtn>
+              <SmallBtn tone={C.danger} onClick={() => { if (confirm("Excluir este treino?")) update({ ...state, workouts: state.workouts.filter((x) => x.id !== w.id) }); }}>excluir</SmallBtn>
             </div>
           </div>
         ))}
       </Card>
 
-      <Card title="Alimentação · últimos dias">
+      <Card cat="food" title="Alimentação · últimos dias">
         {daysSorted.length === 0 && <Empty>Nenhum registro de alimentação.</Empty>}
         {daysSorted.map(([date, v]) => (
-          <div key={date} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
+          <div key={date} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.hair}` }}>
             <div>
-              <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 14, fontWeight: 600, color: C.ink }}>
+              <div style={{ fontFamily: SYS, fontSize: 14, fontWeight: 600, color: C.ink }}>
                 {fmtBR(date)} <span style={{ color: C.mute, fontWeight: 400 }}>· {weekdayShort(date)}</span>
               </div>
               <div style={{ fontSize: 13, color: C.mute }}>
@@ -990,7 +1046,7 @@ export default function App() {
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <SmallBtn onClick={() => setModal({ kind: "dia", date })}>editar</SmallBtn>
-              <SmallBtn tone={C.zone} onClick={() => {
+              <SmallBtn tone={C.danger} onClick={() => {
                 if (confirm("Excluir o registro de alimentação deste dia?")) {
                   const { [date]: _omit, ...rest } = state.days;
                   update({ ...state, days: rest });
@@ -1001,12 +1057,12 @@ export default function App() {
         ))}
       </Card>
 
-      <Card title="Medidas diárias · últimos dias">
+      <Card cat="body" title="Medidas diárias · últimos dias">
         {vitalsSorted.length === 0 && <Empty>Nenhum registro de peso/FC ainda.</Empty>}
         {vitalsSorted.map(([date, v]) => (
-          <div key={date} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
+          <div key={date} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.hair}` }}>
             <div>
-              <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 14, fontWeight: 600, color: C.ink }}>
+              <div style={{ fontFamily: SYS, fontSize: 14, fontWeight: 600, color: C.ink }}>
                 {fmtBR(date)} <span style={{ color: C.mute, fontWeight: 400 }}>· {weekdayShort(date)}</span>
               </div>
               <div style={{ fontSize: 12, color: C.mute }}>
@@ -1015,7 +1071,7 @@ export default function App() {
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <SmallBtn onClick={() => setModal({ kind: "vitals", date })}>editar</SmallBtn>
-              <SmallBtn tone={C.zone} onClick={() => {
+              <SmallBtn tone={C.danger} onClick={() => {
                 if (confirm("Excluir as medidas deste dia?")) {
                   const { [date]: _omit, ...rest } = state.vitals;
                   update({ ...state, vitals: rest });
@@ -1035,14 +1091,14 @@ export default function App() {
 
   const Exams = (
     <>
-      <Card title="HDL ao longo do tempo">
+      <Card cat="exam" title="HDL ao longo do tempo">
         {hdlPts.length >= 2
-          ? <Line points={hdlPts} goal={state.goals.hdlGoal} color={C.sea} />
+          ? <Line points={hdlPts} goal={state.goals.hdlGoal} color={C.exam} />
           : (
             <div>
               {hdlPts.length === 1 && (
                 <div style={{ textAlign: "center", padding: "8px 0 2px" }}>
-                  <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 44, fontWeight: 700, color: C.ink }}>{hdlPts[0].v}</span>
+                  <span style={{ fontFamily: SYS, fontSize: 44, fontWeight: 700, color: C.ink }}>{hdlPts[0].v}</span>
                   <span style={{ color: C.mute, fontSize: 14 }}> mg/dL · meta {state.goals.hdlGoal}+</span>
                 </div>
               )}
@@ -1051,22 +1107,22 @@ export default function App() {
           )}
       </Card>
       <div style={{ marginBottom: 14 }}>
-        <PrimaryBtn onClick={() => setModal({ kind: "exame" })}>+ Novo exame</PrimaryBtn>
+        <PrimaryBtn tone={C.exam} onClick={() => setModal({ kind: "exame" })}>Novo exame</PrimaryBtn>
       </div>
       {[...examsSorted].reverse().map((e) => {
         const ldl = ldlOf(e.ct, e.hdl, e.tg);
         return (
           <Card key={e.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <strong style={{ fontFamily: "'Sora', sans-serif", color: C.ink }}>{fmtBR(e.date)}</strong>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong style={{ fontFamily: SYS, fontSize: 17, fontWeight: 700, color: C.ink }}>{fmtBR(e.date)}</strong>
               <div style={{ display: "flex", gap: 6 }}>
                 <SmallBtn onClick={() => setModal({ kind: "exame", e })}>editar</SmallBtn>
-                <SmallBtn tone={C.zone} onClick={() => { if (confirm("Excluir este exame?")) update({ ...state, exams: state.exams.filter((x) => x.id !== e.id) }); }}>excluir</SmallBtn>
+                <SmallBtn tone={C.danger} onClick={() => { if (confirm("Excluir este exame?")) update({ ...state, exams: state.exams.filter((x) => x.id !== e.id) }); }}>excluir</SmallBtn>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 14, marginTop: 8, flexWrap: "wrap", fontFamily: "'Sora', sans-serif", fontSize: 14, color: C.ink }}>
+            <div style={{ display: "flex", gap: 14, marginTop: 8, flexWrap: "wrap", fontFamily: SYS, fontSize: 14, color: C.ink }}>
               <span>CT <b>{e.ct}</b></span>
-              <span style={{ color: e.hdl >= state.goals.hdlGoal ? C.sea : C.zone }}>HDL <b>{e.hdl}</b></span>
+              <span style={{ color: e.hdl >= state.goals.hdlGoal ? C.examTx : C.danger }}>HDL <b>{e.hdl}</b></span>
               <span>TG <b>{e.tg}</b></span>
               <span>LDL <b>{ldl != null ? `~${ldl}` : "n/c*"}</b></span>
               {hasVal(e.apoB) && <span>ApoB <b>{e.apoB}</b></span>}
@@ -1091,15 +1147,15 @@ export default function App() {
         <Field label="Data"><input type="date" value={f.date} max={today} onChange={(e) => setF({ ...f, date: e.target.value })} style={inputStyle} /></Field>
         <Field label="Minutos em zona *">
           <input type="number" inputMode="numeric" autoFocus={!w} value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })}
-            style={{ ...inputStyle, fontFamily: "'Sora', sans-serif", fontSize: 22 }} placeholder="0" />
+            style={{ ...inputStyle, fontFamily: SYS, fontSize: 28, fontWeight: 700 }} placeholder="0" />
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             {quickMins.map((m) => (
               <button key={m} type="button" onClick={() => setF({ ...f, minutes: String(m) })}
                 style={{
                   flex: 1, minHeight: 44, borderRadius: 10, cursor: "pointer",
-                  fontFamily: "'Sora', sans-serif", fontSize: 15, fontWeight: 600,
-                  border: `1.5px solid ${String(f.minutes) === String(m) ? C.sea : C.line}`,
-                  background: String(f.minutes) === String(m) ? C.seaSoft : "#fff",
+                  fontFamily: SYS, fontSize: 15, fontWeight: 600,
+                  border: `1.5px solid ${String(f.minutes) === String(m) ? C.activity : "transparent"}`,
+                  background: String(f.minutes) === String(m) ? `color-mix(in srgb, ${C.activity} 15%, #fff)` : C.fill,
                   color: C.ink, WebkitTapHighlightColor: "transparent",
                 }}>{m}</button>
             ))}
@@ -1113,7 +1169,7 @@ export default function App() {
         <Field label="FC média (opcional)">
           <input type="number" inputMode="numeric" value={f.avgHr} onChange={(e) => setF({ ...f, avgHr: e.target.value })} style={inputStyle} placeholder="—" />
         </Field>
-        <PrimaryBtn onClick={() => {
+        <PrimaryBtn tone={C.activity} onClick={() => {
           if (!f.minutes || Number(f.minutes) <= 0) return;
           if (!confirmRange("minutes", f.minutes)) return;
           if (!confirmRange("avgHr", f.avgHr)) return;
@@ -1128,28 +1184,28 @@ export default function App() {
   function DiaModal({ date: initialDate }) {
     const [date, setDate] = useState(initialDate || today);
     const d = state.days[date] || { fish: 0, nuts: 0, oats: 0, olive: 0, avocado: 0 };
-    const btn = { width: 38, height: 38, borderRadius: 11, fontSize: 20, cursor: "pointer", fontFamily: "'Sora', sans-serif", fontWeight: 600, border: `1.5px solid ${C.line}`, background: "#fff", color: C.ink };
+    const btn = { width: 40, height: 40, borderRadius: 20, fontSize: 22, cursor: "pointer", fontFamily: SYS, fontWeight: 400, border: "none", background: C.fill, color: C.foodTx, display: "grid", placeItems: "center", WebkitTapHighlightColor: "transparent", touchAction: "manipulation" };
     return (
       <Modal title="Alimentação do dia" onClose={() => setModal(null)}>
         <Field label="Data">
           <input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
         </Field>
         {FOODS.map((f) => (
-          <div key={f.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+          <div key={f.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `0.5px solid ${C.hair}` }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>{f.emoji} {f.name}</div>
+              <div style={{ fontSize: 16, fontWeight: 500, color: C.ink }}>{f.emoji} {f.name}</div>
               <div style={{ fontSize: 12, color: C.mute }}>{f.portion}</div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
               <button style={{ ...btn, opacity: (d[f.key] || 0) === 0 ? 0.35 : 1 }}
                 onClick={() => setFoodDay(date, f.key, Math.max(0, (d[f.key] || 0) - 1))}>−</button>
-              <span style={{ fontFamily: "'Sora', sans-serif", fontSize: 19, fontWeight: 700, width: 20, textAlign: "center" }}>{d[f.key] || 0}</span>
-              <button style={{ ...btn, background: C.ink, color: "#fff", border: "none" }}
+              <span style={{ fontFamily: SYS, fontSize: 20, fontWeight: 700, width: 20, textAlign: "center", color: (d[f.key] || 0) > 0 ? C.ink : C.faint }}>{d[f.key] || 0}</span>
+              <button style={{ ...btn, background: C.food, color: "#fff" }}
                 onClick={() => setFoodDay(date, f.key, (d[f.key] || 0) + 1)}>+</button>
             </div>
           </div>
         ))}
-        <div style={{ marginTop: 16 }}><PrimaryBtn onClick={() => setModal(null)}>Concluir</PrimaryBtn></div>
+        <div style={{ marginTop: 16 }}><PrimaryBtn tone={C.food} onClick={() => setModal(null)}>Concluir</PrimaryBtn></div>
       </Modal>
     );
   }
@@ -1192,7 +1248,7 @@ export default function App() {
           <Field label="Peso (kg)">
             <input type="number" step="0.1" inputMode="decimal" value={f.weight}
               onChange={(e) => { setF({ ...f, weight: e.target.value }); setWeightInherited(false); }}
-              style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+              style={{ ...inputStyle, fontFamily: SYS }} placeholder="—" />
             {weightInherited && f.weight !== "" && (
               <div style={{ fontSize: 11, color: C.mute, marginTop: 4 }}>
                 último registro: {String(inherited).replace(".", ",")} kg — edite para gravar hoje
@@ -1201,7 +1257,7 @@ export default function App() {
           </Field>
           <Field label="FC repouso (bpm)">
             <input type="number" inputMode="numeric" value={f.restHr} onChange={(e) => setF({ ...f, restHr: e.target.value })}
-              style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+              style={{ ...inputStyle, fontFamily: SYS }} placeholder="—" />
           </Field>
         </div>
         <PrimaryBtn onClick={() => {
@@ -1232,7 +1288,7 @@ export default function App() {
             setVitalVal(date, { weight: weightToSave, restHr: f.restHr });
           }
           setModal(null);
-        }}>Salvar medidas</PrimaryBtn>
+        }} tone={C.body}>Salvar medidas</PrimaryBtn>
       </Modal>
     );
   }
@@ -1250,23 +1306,23 @@ export default function App() {
           {[["ct", "CT"], ["hdl", "HDL"], ["tg", "TG"]].map(([k, l]) => (
             <Field key={k} label={l}>
               <input type="number" inputMode="numeric" value={f[k]} onChange={(ev) => setF({ ...f, [k]: ev.target.value })}
-                style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+                style={{ ...inputStyle, fontFamily: SYS }} placeholder="—" />
             </Field>
           ))}
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <Field label={<>ApoB <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0, color: C.mute }}>· Apolipoproteína B</span></>}>
             <input type="number" step="0.1" inputMode="decimal" value={f.apoB} onChange={(ev) => setF({ ...f, apoB: ev.target.value })}
-              style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+              style={{ ...inputStyle, fontFamily: SYS }} placeholder="—" />
           </Field>
           <Field label={<>Lp(a) <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0, color: C.mute }}>· Lipoproteína(a)</span></>}>
             <input type="number" step="0.1" inputMode="decimal" value={f.lpa} onChange={(ev) => setF({ ...f, lpa: ev.target.value })}
-              style={{ ...inputStyle, fontFamily: "'Sora', sans-serif" }} placeholder="—" />
+              style={{ ...inputStyle, fontFamily: SYS }} placeholder="—" />
           </Field>
         </div>
-        <div style={{ background: C.mist, borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 14, color: C.ink }}>
+        <div style={{ background: C.fill, borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 14, color: C.ink }}>
           LDL calculado:{" "}
-          <b style={{ fontFamily: "'Sora', sans-serif" }}>
+          <b style={{ fontFamily: SYS }}>
             {f.ct && f.hdl && f.tg !== "" ? (ldl != null ? `~${ldl} mg/dL` : "TG ≥ 400 — não calculável") : "—"}
           </b>
           {ldl != null && <span style={{ color: C.mute }}> · não-HDL {Number(f.ct) - Number(f.hdl)}</span>}
@@ -1287,7 +1343,7 @@ export default function App() {
           if (f.lpa !== "") rec.lpa = Number(f.lpa); else delete rec.lpa;
           update({ ...state, exams: e ? state.exams.map((x) => (x.id === e.id ? rec : x)) : [...state.exams, rec] });
           setModal(null);
-        }}>{e ? "Salvar alterações" : "Salvar exame"}</PrimaryBtn>
+        }} tone={C.exam}>{e ? "Salvar alterações" : "Salvar exame"}</PrimaryBtn>
       </Modal>
     );
   }
@@ -1354,12 +1410,12 @@ export default function App() {
 
     return (
       <Modal title="Configurações" onClose={() => setModal(null)}>
-        <h3 style={{ fontSize: 12, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute }}>Metas</h3>
+        <h3 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", color: C.mute, margin: "6px 0 10px" }}>Metas</h3>
         {goalFields.map(([k, l]) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0" }}>
             <span style={{ fontSize: 14, color: C.ink }}>{l}</span>
             <input type="number" step="0.1" inputMode={k === "weightGoal" ? "decimal" : "numeric"} value={g[k]} onChange={(e) => setG({ ...g, [k]: e.target.value })}
-              style={{ ...inputStyle, width: 88, fontFamily: "'Sora', sans-serif", textAlign: "center" }} />
+              style={{ ...inputStyle, width: 88, fontFamily: SYS, textAlign: "center" }} />
           </div>
         ))}
         <div style={{ margin: "12px 0 20px" }}>
@@ -1368,24 +1424,24 @@ export default function App() {
           </PrimaryBtn>
         </div>
 
-        <h3 style={{ fontSize: 12, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute }}>Exportar</h3>
+        <h3 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", color: C.mute, margin: "6px 0 10px" }}>Exportar</h3>
         <div style={{ display: "grid", gap: 8, marginBottom: 20 }}>
-          <PrimaryBtn tone={C.sea} onClick={exportJSON}>Backup completo (JSON)</PrimaryBtn>
-          <PrimaryBtn tone={C.sea} onClick={exportCSV}>Planilhas (4 CSV)</PrimaryBtn>
-          <PrimaryBtn tone={C.sea} onClick={resumo}>Resumo para consulta (texto)</PrimaryBtn>
+          <PrimaryBtn tone={C.blue} onClick={exportJSON}>Backup completo (JSON)</PrimaryBtn>
+          <PrimaryBtn tone={C.blue} onClick={exportCSV}>Planilhas (4 CSV)</PrimaryBtn>
+          <PrimaryBtn tone={C.blue} onClick={resumo}>Resumo para consulta (texto)</PrimaryBtn>
         </div>
 
-        <h3 style={{ fontSize: 12, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute }}>Restaurar / dados</h3>
+        <h3 style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", color: C.mute, margin: "6px 0 10px" }}>Restaurar / dados</h3>
         <div style={{ display: "grid", gap: 8 }}>
-          <button onClick={() => fileRef.current?.click()} style={{ ...inputStyle, cursor: "pointer", textAlign: "center", fontWeight: 600 }}>
+          <button onClick={() => fileRef.current?.click()} style={{ ...inputStyle, cursor: "pointer", textAlign: "center", color: C.blue, fontWeight: 600 }}>
             Importar backup JSON
           </button>
           <input ref={fileRef} type="file" accept=".json" onChange={importJSON} style={{ display: "none" }} />
-          <button onClick={() => { update(demoState()); setModal(null); }} style={{ ...inputStyle, cursor: "pointer", textAlign: "center" }}>
+          <button onClick={() => { update(demoState()); setModal(null); }} style={{ ...inputStyle, cursor: "pointer", textAlign: "center", color: C.blue, fontWeight: 500 }}>
             Recarregar dados de exemplo
           </button>
           <button onClick={() => { if (confirm("Apagar todos os dados e começar do zero?")) { update(emptyState()); setModal(null); } }}
-            style={{ ...inputStyle, cursor: "pointer", textAlign: "center", color: C.zone, borderColor: C.zone }}>
+            style={{ ...inputStyle, cursor: "pointer", textAlign: "center", color: C.danger, fontWeight: 500 }}>
             Zerar dados (começar meu uso real)
           </button>
         </div>
@@ -1426,28 +1482,38 @@ export default function App() {
     ),
   };
 
-  const tabs = [["home", "Home"], ["trends", "Tendências"], ["log", "Registros"], ["exams", "Exames"]];
+  const tabs = [["home", "Resumo"], ["trends", "Tendências"], ["log", "Registros"], ["exams", "Exames"]];
+  const tabTitle = { home: "Resumo", trends: "Tendências", log: "Registros", exams: "Exames" };
+  const dataExtenso = new Date(today + "T12:00:00")
+    .toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "short" })
+    .toUpperCase().replace(/\.$/, "");
 
   return (
-    <div style={{ minHeight: "100dvh", background: C.mist, fontFamily: "'IBM Plex Sans', sans-serif" }}>
+    <div style={{ minHeight: "100dvh", background: C.bg, fontFamily: SYS }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
-        button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid ${C.sea}; outline-offset: 2px; }
+        button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid ${C.blue}; outline-offset: 2px; }
         @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
         .nav-btn { transition: filter .1s ease, transform .1s ease; }
         .nav-btn:active { filter: brightness(0.93); transform: scale(0.96); }
       `}</style>
 
-      <header style={{ maxWidth: 480, margin: "0 auto", padding: "calc(18px + env(safe-area-inset-top)) 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontFamily: "'Sora', sans-serif", fontWeight: 700, fontSize: 20, color: C.ink }}>HDL 40+</div>
-          <div style={{ fontSize: 12, color: C.mute }}>Acompanhamento pessoal</div>
+      {/* Cabeçalho de aba estilo iOS: data por extenso em caixa alta cinza
+          ACIMA do título grande (large title), com engrenagem discreta. */}
+      <header style={{ maxWidth: 480, margin: "0 auto", padding: "calc(16px + env(safe-area-inset-top)) 16px 8px", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: ".02em", color: C.mute }}>{dataExtenso}</div>
+          <h1 style={{ margin: "2px 0 0", fontFamily: SYS, fontWeight: 700, fontSize: 34, lineHeight: 1.1, letterSpacing: "-0.02em", color: C.ink }}>{tabTitle[tab]}</h1>
         </div>
         <button onClick={() => setModal({ kind: "config" })} aria-label="Configurações"
-          style={{ border: `1.5px solid ${C.line}`, background: "#fff", borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: "pointer" }}>⚙</button>
+          style={{ border: "none", background: C.fill, borderRadius: 18, width: 36, height: 36, cursor: "pointer", color: C.blue, display: "grid", placeItems: "center", flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </header>
 
-      <main style={{ maxWidth: 480, margin: "0 auto", padding: "10px 16px calc(116px + env(safe-area-inset-bottom))" }}>
+      <main style={{ maxWidth: 480, margin: "0 auto", padding: "8px 16px calc(116px + env(safe-area-inset-bottom))" }}>
         {tab === "home" && Home}
         {tab === "trends" && Trends}
         {tab === "log" && Registros}
@@ -1457,35 +1523,38 @@ export default function App() {
       {/* Barra inferior — no Safari iOS a barra do navegador fica colada logo
           abaixo desta nav; por isso o conteúdo (ícone+rótulo) é ancorado no
           TOPO de cada botão (justifyContent flex-start), com respiro grande na
-          base (20px + safe-area) para afastar o alvo útil da faixa que o Safari
-          rouba. viewport-fit=cover (index.html) faz o env() valer no aparelho;
-          o fundo branco pinta contínuo até a borda física inferior. */}
+          base (22px + safe-area) para afastar o alvo útil da faixa que o Safari
+          rouba. viewport-fit=cover (index.html) faz o env() valer no aparelho.
+          Fundo translúcido com blur (estilo iOS), hairline superior, sem pílula
+          nem borda de 3px. minHeight 76 e paddings preservados intactos. */}
       <nav style={{
-        position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff",
-        borderTop: `1px solid ${C.line}`, boxShadow: "0 -3px 16px rgba(18,52,59,.07)",
+        position: "fixed", bottom: 0, left: 0, right: 0,
+        background: "rgba(255,255,255,0.82)", backdropFilter: "saturate(180%) blur(20px)", WebkitBackdropFilter: "saturate(180%) blur(20px)",
+        borderTop: `0.5px solid ${C.hair}`,
       }}>
         <div style={{ maxWidth: 480, margin: "0 auto", display: "flex" }}>
-          {tabs.map(([id, label]) => (
+          {tabs.map(([id, label]) => {
+            const active = tab === id;
+            return (
             <button key={id} onClick={() => setTab(id)} className="nav-btn"
-              aria-current={tab === id ? "page" : undefined}
+              aria-current={active ? "page" : undefined}
               aria-label={label}
               style={{
                 flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start",
-                gap: 5, border: "none", cursor: "pointer", boxSizing: "border-box",
-                minHeight: 76, paddingTop: 13, paddingLeft: 4, paddingRight: 4,
+                gap: 4, border: "none", cursor: "pointer", boxSizing: "border-box",
+                minHeight: 76, paddingTop: 12, paddingLeft: 4, paddingRight: 4,
                 paddingBottom: "calc(22px + env(safe-area-inset-bottom))",
-                background: tab === id ? C.seaSoft : "transparent",
-                fontFamily: "'Sora', sans-serif", fontSize: 12,
-                fontWeight: tab === id ? 700 : 500,
-                color: tab === id ? C.ink : C.mute,
-                borderTop: tab === id ? `3px solid ${C.sea}` : "3px solid transparent",
+                background: "transparent",
+                fontFamily: SYS, fontSize: 11,
+                fontWeight: active ? 600 : 500,
+                color: active ? C.blue : C.mute,
                 touchAction: "manipulation",
                 WebkitTapHighlightColor: "transparent",
               }}>
               {NAV_ICONS[id]}
               <span>{label}</span>
             </button>
-          ))}
+          );})}
         </div>
       </nav>
 
