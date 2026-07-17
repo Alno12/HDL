@@ -256,6 +256,29 @@ function weekVitalsAvg(vitals, monday, key) {
   }
   return vals.length ? mean(vals) : null;
 }
+// Série diária de um vital (peso ou FC de repouso) nos últimos `n` dias
+// (hoje incluso), só com os dias que têm registro válido (> 0). Usada
+// pelos gráficos DIÁRIOS de Tendências — diferente de weekVitalsAvg (que
+// segue agregando por semana, intocada, para os Δ de 4 semanas nos Stats).
+// Custo é sempre O(n) fixo (30 chamadas a addDays), independente de quanto
+// histórico o usuário acumulou — por isso não precisa de useMemo aqui
+// (diferente de `insights`, que varre o objeto `vitals` inteiro).
+function dailyVitalsSeries(vitals, key, today, n = 30) {
+  const pts = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = addDays(today, -i);
+    const v = Number(vitals[d]?.[key]);
+    if (v > 0) pts.push({ date: d, v });
+  }
+  return pts;
+}
+// Média móvel sobre os ATÉ 7 registros anteriores (incluindo o próprio
+// ponto) de uma série já filtrada para só valores válidos — a janela conta
+// REGISTROS, não dias corridos, então um dia sem anotação não distorce a
+// suavização nem produz um buraco na linha.
+function movingAvg(pts, window = 7) {
+  return pts.map((_, i) => mean(pts.slice(Math.max(0, i - window + 1), i + 1).map((p) => p.v)));
+}
 function lastNWeeks(n) {
   const cur = mondayOf(todayStr());
   const arr = [];
@@ -578,10 +601,17 @@ function Bars({ data, goal, labels, ma, color = C.activity }) {
   );
 }
 
-function Line({ points, goal, unit, color = C.ink, band }) {
+// `raw`: série de apoio opcional (mesmo índice/posição x de `points`) —
+// usada pelos gráficos diários para plotar o valor bruto do dia como ponto
+// pequeno e claro POR BAIXO da linha protagonista (`points`, ex.: a média
+// móvel de 7 dias). `showValues=false` esconde o rótulo numérico de cada
+// ponto — necessário quando `points` tem muitos pontos (série diária de
+// até 30 dias) e o número em cima de cada um poluiria o gráfico.
+function Line({ points, raw, goal, unit, color = C.ink, band, showValues = true }) {
   const W = 320, H = 116, padX = 8, padY = 16;
   const vals = points.map((p) => p.v);
   const all = [...vals];
+  if (raw) all.push(...raw.filter((v) => v != null));
   if (goal != null) all.push(goal);
   if (band) all.push(band[0], band[1]);
   const min = Math.min(...all), max = Math.max(...all);
@@ -590,6 +620,15 @@ function Line({ points, goal, unit, color = C.ink, band }) {
   const y = (v) => padY + (1 - (v - min) / span) * (H - padY * 2);
   const d = points.map((p, i) => `${i ? "L" : "M"}${x(i)},${y(p.v)}`).join(" ");
   const area = `${d} L${x(points.length - 1)},${H} L${x(0)},${H} Z`;
+  // Passo dos rótulos: 1 a cada ponto até o limiar de sempre; a partir daí,
+  // um passo que mira ~6 rótulos no total — senão uma série diária de até
+  // 30 pontos sobrepõe datas. Os limiares (8 p/ valores, 6 p/ datas) e o
+  // passo fixo de 2 para até 12 pontos são os mesmos de antes desta função
+  // aceitar séries longas. Única diferença nos gráficos semanais (≤12
+  // pontos): o último ponto agora sempre ganha rótulo de data — antes, em
+  // séries de comprimento par, a data mais recente ficava sem rótulo.
+  const valueStep = points.length <= 8 ? 1 : Math.ceil(points.length / 6);
+  const labelStep = points.length <= 6 ? 1 : Math.ceil(points.length / 6);
   return (
     <svg viewBox={`0 0 ${W} ${H + 14}`} style={{ width: "100%" }}>
       {band && (
@@ -608,12 +647,15 @@ function Line({ points, goal, unit, color = C.ink, band }) {
         </>
       )}
       <path d={area} fill={color} opacity="0.1" />
+      {raw && raw.map((v, i) => v == null ? null : (
+        <circle key={"r" + i} cx={x(i)} cy={y(v)} r="1.8" fill={color} opacity="0.32" />
+      ))}
       <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
       {points.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.v)} r="3.2" fill={color} />)}
-      {points.map((p, i) => (points.length <= 8 || i % 2 === 0 || i === points.length - 1) ? (
+      {showValues && points.map((p, i) => (i % valueStep === 0 || i === points.length - 1) ? (
         <text key={"t" + i} x={x(i)} y={y(p.v) - 7} textAnchor="middle" fontSize="9" fill={C.mute}>{p.v}{unit || ""}</text>
       ) : null)}
-      {points.map((p, i) => p.l && (points.length <= 6 || i % 2 === 0) ? (
+      {points.map((p, i) => p.l && (i % labelStep === 0 || i === points.length - 1) ? (
         // Extremos ancoram para dentro (start/end) — senão o 1º e o último
         // rótulo de data vazam da largura do SVG e aparecem cortados no card.
         <text key={"l" + i} x={i === 0 ? 2 : i === points.length - 1 ? W - 2 : x(i)} y={H + 11}
@@ -798,10 +840,20 @@ export default function App() {
   const dRest = delta(restVals), dWt = delta(wtVals);
   const fmtDelta = (d, unit) => (d == null ? "—" : `${d > 0 ? "+" : ""}${d.toFixed(1)} ${unit}`);
 
-  const restSeries = weeks12.map((m, i) => ({ l: wLabels[i], v: restVals[i] != null ? Math.round(restVals[i]) : null }))
-    .filter((p) => p.v != null);
-  const wtSeries = weeks12.map((m, i) => ({ l: wLabels[i], v: wtVals[i] != null ? Math.round(wtVals[i] * 10) / 10 : null }))
-    .filter((p) => p.v != null);
+  // Os Δ de 4 semanas acima (dRest/dWt) usam as médias SEMANAIS restVals/
+  // wtVals. Os GRÁFICOS de peso/FC de repouso usam séries DIÁRIAS (abaixo):
+  // item 8 do roadmap — com agregação semanal, quem começa a anotar há
+  // poucos dias não via gráfico nenhum (exigia 2 semanas distintas).
+  const weightDaily = dailyVitalsSeries(state.vitals, "weight", today);
+  const restDaily = dailyVitalsSeries(state.vitals, "restHr", today);
+  const weightDailyMA = movingAvg(weightDaily);
+  const restDailyMA = movingAvg(restDaily);
+  // Pontos da linha protagonista (a média móvel) e série de apoio (valor
+  // bruto do dia) alinhados pelo mesmo índice — ver comentário do `Line`.
+  const weightMAPts = weightDaily.map((p, i) => ({ l: fmtShort(p.date), v: Math.round(weightDailyMA[i] * 10) / 10 }));
+  const weightRaw = weightDaily.map((p) => p.v);
+  const restMAPts = restDaily.map((p, i) => ({ l: fmtShort(p.date), v: Math.round(restDailyMA[i]) }));
+  const restRaw = restDaily.map((p) => p.v);
 
   const hrSeries = weeks12.map((m, i) => {
     const end = addDays(m, 6);
@@ -976,12 +1028,36 @@ export default function App() {
         )}
       </Card>
 
-      <Card cat="heart" title="FC de repouso · semanal">
-        {restSeries.length >= 2 ? <Line points={restSeries} color={C.heart} /> : <Empty>Anote a FC de repouso semanal na Home.</Empty>}
+      <Card cat="heart" title="FC de repouso · diário" right="média móvel · 7 registros">
+        {restDaily.length >= 2 ? (
+          <Line points={restMAPts} raw={restRaw} color={C.heart} showValues={false} />
+        ) : restDaily.length === 1 ? (
+          <div>
+            <div style={{ textAlign: "center", padding: "8px 0 2px" }}>
+              <span style={{ fontFamily: SYS, fontSize: 44, fontWeight: 700, color: C.ink }}>{restDaily[0].v}</span>
+              <span style={{ color: C.mute, fontSize: 14 }}> bpm</span>
+            </div>
+            <Empty>Registre mais um dia para ver a evolução aqui.</Empty>
+          </div>
+        ) : (
+          <Empty>Registre sua FC de repouso na Home — a partir do 2º dia o gráfico aparece aqui.</Empty>
+        )}
       </Card>
 
-      <Card cat="body" title="Peso · semanal">
-        {wtSeries.length >= 2 ? <Line points={wtSeries} goal={Number(state.goals.weightGoal) || null} color={C.body} /> : <Empty>Anote o peso semanal na Home.</Empty>}
+      <Card cat="body" title="Peso · diário" right="média móvel · 7 registros">
+        {weightDaily.length >= 2 ? (
+          <Line points={weightMAPts} raw={weightRaw} goal={Number(state.goals.weightGoal) || null} color={C.body} showValues={false} />
+        ) : weightDaily.length === 1 ? (
+          <div>
+            <div style={{ textAlign: "center", padding: "8px 0 2px" }}>
+              <span style={{ fontFamily: SYS, fontSize: 44, fontWeight: 700, color: C.ink }}>{weightDaily[0].v}</span>
+              <span style={{ color: C.mute, fontSize: 14 }}> kg</span>
+            </div>
+            <Empty>Registre mais um dia para ver a evolução aqui.</Empty>
+          </div>
+        ) : (
+          <Empty>Registre seu peso na Home — a partir do 2º dia o gráfico aparece aqui.</Empty>
+        )}
       </Card>
     </>
   );
@@ -1220,12 +1296,18 @@ export default function App() {
     const moving = hadOriginalData && date !== originalDate;
     const originalRecord = state.vitals[originalDate] || { weight: "", restHr: "" };
     const v = state.vitals[date] || { weight: "", restHr: "" };
-    // Durante uma movimentação, o hint de "peso herdado" deve refletir a
-    // origem (o que está de fato nos campos), não o destino — evita texto
-    // incoerente enquanto os valores da origem são preservados abaixo.
+    // Peso do último dia registrado antes desta data — usado só como DICA
+    // (placeholder) de quanto foi o último peso, nunca como valor do campo.
+    // Um campo com valor visível passa a impressão de que o peso do dia já
+    // está gravado; o dono do app perdeu 2 de 3 registros de peso por isso
+    // (achado de QA com usuário real). Durante uma movimentação, a dica deve
+    // refletir a origem, para ficar coerente com os valores reais que viajam
+    // nos campos abaixo.
     const inherited = moving ? lastWeightBefore(state.vitals, originalDate) : lastWeightBefore(state.vitals, date);
-    const [f, setF] = useState({ weight: v.weight || (inherited != null ? String(inherited) : ""), restHr: v.restHr || "" });
-    const [weightInherited, setWeightInherited] = useState(!v.weight && inherited != null);
+    const [f, setF] = useState({
+      weight: (moving ? originalRecord.weight : v.weight) || "",
+      restHr: (moving ? originalRecord.restHr : v.restHr) || "",
+    });
     useEffect(() => {
       // Durante uma movimentação (hadOriginalData && date !== originalDate),
       // NÃO recarrega os campos a partir do destino — os valores da origem
@@ -1235,9 +1317,7 @@ export default function App() {
       // valores do DESTINO, apagando os da origem ao mover.
       if (moving) return;
       const vv = state.vitals[date] || { weight: "", restHr: "" };
-      const inh = lastWeightBefore(state.vitals, date);
-      setF({ weight: vv.weight || (inh != null ? String(inh) : ""), restHr: vv.restHr || "" });
-      setWeightInherited(!vv.weight && inh != null);
+      setF({ weight: vv.weight || "", restHr: vv.restHr || "" });
     }, [date]);
     return (
       <Modal title="Medidas do dia" onClose={() => setModal(null)}>
@@ -1247,11 +1327,12 @@ export default function App() {
         <div style={{ display: "flex", gap: 10 }}>
           <Field label="Peso (kg)">
             <input type="number" step="0.1" inputMode="decimal" value={f.weight}
-              onChange={(e) => { setF({ ...f, weight: e.target.value }); setWeightInherited(false); }}
-              style={{ ...inputStyle, fontFamily: SYS }} placeholder="—" />
-            {weightInherited && f.weight !== "" && (
+              onChange={(e) => setF({ ...f, weight: e.target.value })}
+              style={{ ...inputStyle, fontFamily: SYS }}
+              placeholder={inherited != null ? `último: ${String(inherited).replace(".", ",")}` : "—"} />
+            {inherited != null && f.weight === "" && (
               <div style={{ fontSize: 11, color: C.mute, marginTop: 4 }}>
-                último registro: {String(inherited).replace(".", ",")} kg — edite para gravar hoje
+                toque para registrar o peso de hoje
               </div>
             )}
           </Field>
@@ -1261,15 +1342,15 @@ export default function App() {
           </Field>
         </div>
         <PrimaryBtn onClick={() => {
-          // Peso herdado (pré-preenchido) e não editado não é gravado — só o
-          // que o usuário mediu de fato entra na série (achado da revisão).
-          // Ao mover, o "já salvo" de referência é o da ORIGEM (originalRecord),
-          // não o do destino — evita reintroduzir a perda/mistura de dados.
-          const weightFallback = moving ? (originalRecord.weight || "") : (v.weight || "");
-          const weightToSave = weightInherited ? weightFallback : f.weight;
+          // O campo nunca é pré-preenchido com o peso herdado (só o placeholder
+          // mostra a dica) — então o que está em f.weight é sempre o que o
+          // usuário de fato digitou (ou o valor real já salvo, ao editar um dia
+          // que já tem peso próprio). "Herdado não grava" passa a ser automático:
+          // campo vazio → weight "".
+          const weightToSave = f.weight;
           if (!confirmRange("weight", weightToSave)) return;
           if (!confirmRange("restHr", f.restHr)) return;
-          if (!weightInherited && !confirmWeightJump(state.vitals, date, f.weight)) return;
+          if (!confirmWeightJump(state.vitals, date, f.weight)) return;
 
           // Se a data foi trocada e a origem tinha registro, isso é uma
           // MOVIMENTAÇÃO: grava no destino os valores atualmente nos campos
