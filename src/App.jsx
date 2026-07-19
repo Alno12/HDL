@@ -210,6 +210,34 @@ function migrateState(s) {
     const { weeks, ...rest } = s;
     out = { ...rest, vitals };
   }
+  // Varredura de vitals: remove entradas sem NENHUM valor útil — lixo de
+  // versões antigas que salvavam a cada tecla digitada, ficando como
+  // {weight:"", restHr:""} (ou variações com null/undefined). Invisíveis na
+  // lista de Registros (filtro `v.weight || v.restHr`) e sem efeito nas
+  // contas, mas é exatamente o tipo de "registro oculto" que preocupa o
+  // dono do app — melhor não deixar existir. Também descarta entradas cujo
+  // valor não é um objeto (defesa contra dado corrompido). Roda sempre,
+  // mesmo quando `s.vitals` já existia (não só no caminho weeks→vitals),
+  // e também se aplica ao import de backup JSON (que passa por esta mesma
+  // função). Nunca remove entrada com pelo menos um valor presente.
+  const cleanVitals = {};
+  for (const [date, v] of Object.entries(out.vitals || {})) {
+    if (v && typeof v === "object" && (hasVal(v.weight) || hasVal(v.restHr))) {
+      cleanVitals[date] = v;
+    }
+  }
+  out = { ...out, vitals: cleanVitals };
+  // Mesma varredura para dias de alimentação todos zerados: hoje o
+  // setFoodDay já remove o dia ao zerar a última porção, mas dados antigos
+  // (ou backups importados) podem carregar dias {fish:0,...} sem registro
+  // real. Sem efeito nas contas (todas filtram porção > 0), só higiene.
+  const cleanDays = {};
+  for (const [date, d] of Object.entries(out.days || {})) {
+    if (d && typeof d === "object" && Object.values(d).some((n) => Number(n) > 0)) {
+      cleanDays[date] = d;
+    }
+  }
+  out = { ...out, days: cleanDays };
   // Backfill de metas ausentes (ex.: alimento novo adicionado depois que o
   // backup foi salvo) a partir de defaultGoals, sem sobrescrever metas já
   // personalizadas pelo usuário.
@@ -235,23 +263,40 @@ function ldlOf(ct, hdl, tg) {
   if (Number(tg) >= 400) return null;
   return Math.round(Number(ct) - Number(hdl) - Number(tg) / 5);
 }
-function weekMinutes(workouts, monday) {
+// `today`: dados com data FUTURA (sobra do antigo bug de fuso em
+// todayStr()/UTC, ou relógio do aparelho errado) não entram na semana
+// corrente — só têm efeito quando `monday` é a semana atual (para semanas
+// passadas, end < today sempre, então o filtro é um no-op).
+function weekMinutes(workouts, monday, today = todayStr()) {
   const end = addDays(monday, 6);
-  return workouts.filter((w) => w.date >= monday && w.date <= end)
+  return workouts.filter((w) => w.date >= monday && w.date <= end && w.date <= today)
     .reduce((s, w) => s + Number(w.minutes || 0), 0);
 }
 function dayMinutes(workouts, date) {
   return workouts.filter((w) => w.date === date).reduce((s, w) => s + Number(w.minutes || 0), 0);
 }
-function foodWeekTotal(days, monday, key) {
+// Mesma proteção contra data futura de weekMinutes/weekVitalsAvg. A UI
+// hoje não deixa registrar alimentação com data futura (inputs têm
+// `max={today}`), então isto protege contra dado antigo/importado com
+// data ruim.
+function foodWeekTotal(days, monday, key, today = todayStr()) {
   let t = 0;
-  for (let i = 0; i < 7; i++) t += Number(days[addDays(monday, i)]?.[key] || 0);
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(monday, i);
+    if (d > today) continue;
+    t += Number(days[d]?.[key] || 0);
+  }
   return t;
 }
-function weekVitalsAvg(vitals, monday, key) {
+// `today`: mesma proteção contra data futura de `weekMinutes` — um
+// registro de vitals com data adiante do dia atual (sobra do bug de fuso
+// ou relógio errado) não deve entrar na média da semana corrente.
+function weekVitalsAvg(vitals, monday, key, today = todayStr()) {
   const vals = [];
   for (let i = 0; i < 7; i++) {
-    const v = Number(vitals[addDays(monday, i)]?.[key]);
+    const d = addDays(monday, i);
+    if (d > today) continue;
+    const v = Number(vitals[d]?.[key]);
     if (v > 0) vals.push(v);
   }
   return vals.length ? mean(vals) : null;
@@ -519,7 +564,7 @@ function WeekStrip({ workouts, monday }) {
 function FoodRow({ food, monday, days, weekGoal, onSetDay }) {
   const today = todayStr();
   const countToday = Number(days[today]?.[food.key] || 0);
-  const weekTotal = foodWeekTotal(days, monday, food.key);
+  const weekTotal = foodWeekTotal(days, monday, food.key, today);
   const done = weekTotal >= weekGoal;
   const btn = {
     width: 40, height: 40, borderRadius: 20, fontSize: 22, cursor: "pointer",
@@ -606,17 +651,23 @@ function Bars({ data, goal, labels, ma, color = C.activity }) {
   );
 }
 
-// `raw`: série de apoio opcional (mesmo índice/posição x de `points`) —
-// usada pelos gráficos diários para plotar o valor bruto do dia como ponto
-// pequeno e claro POR BAIXO da linha protagonista (`points`, ex.: a média
-// móvel de 7 dias). `showValues=false` esconde o rótulo numérico de cada
-// ponto — necessário quando `points` tem muitos pontos (série diária de
-// até 30 dias) e o número em cima de cada um poluiria o gráfico.
-function Line({ points, raw, goal, unit, color = C.ink, band, showValues = true }) {
+// `trend`: série de tendência opcional (mesmo índice/posição x de `points`,
+// ex.: média móvel) — desenhada como uma linha LISA, SEM círculos próprios,
+// por trás dos dados. Os CÍRCULOS (e os rótulos de valor) ficam só em
+// `points` — a medida REAL que o usuário registrou — para nunca parecer um
+// segundo registro sobreposto ao primeiro (era o bug: MA com círculo +
+// valor bruto com círculo pequeno pareciam 2 registros por dia). `connect
+// =false` esconde a linha que liga os pontos brutos entre si — estilo
+// "Apple Saúde": marcas soltas por medida + uma curva de tendência única —
+// mantendo círculos e rótulos. `showValues=false` esconde o rótulo
+// numérico de cada ponto — necessário quando `points` tem muitos pontos
+// (série diária de até 30 dias) e o número em cima de cada um poluiria o
+// gráfico.
+function Line({ points, trend, goal, unit, color = C.ink, band, showValues = true, connect = true }) {
   const W = 320, H = 116, padX = 8, padY = 16;
   const vals = points.map((p) => p.v);
   const all = [...vals];
-  if (raw) all.push(...raw.filter((v) => v != null));
+  if (trend) all.push(...trend.filter((v) => v != null));
   if (goal != null) all.push(goal);
   if (band) all.push(band[0], band[1]);
   const min = Math.min(...all), max = Math.max(...all);
@@ -624,7 +675,15 @@ function Line({ points, raw, goal, unit, color = C.ink, band, showValues = true 
   const x = (i) => padX + (i / Math.max(points.length - 1, 1)) * (W - padX * 2);
   const y = (v) => padY + (1 - (v - min) / span) * (H - padY * 2);
   const d = points.map((p, i) => `${i ? "L" : "M"}${x(i)},${y(p.v)}`).join(" ");
-  const area = `${d} L${x(points.length - 1)},${H} L${x(0)},${H} Z`;
+  const trendD = trend
+    ? trend.map((v, i) => (v == null ? null : `${i ? "L" : "M"}${x(i)},${y(v)}`)).filter(Boolean).join(" ")
+    : null;
+  // Área sob a curva: quando os pontos brutos não são ligados por linha
+  // (connect=false), a área acompanha a tendência — senão ela "flutuaria"
+  // sem nenhum traço de contorno. Comportamento antigo preservado quando
+  // não há `trend` ou os pontos continuam ligados (outros gráficos).
+  const areaSrc = trend && !connect ? trendD : d;
+  const area = areaSrc ? `${areaSrc} L${x(points.length - 1)},${H} L${x(0)},${H} Z` : null;
   // Passo dos rótulos: 1 a cada ponto até o limiar de sempre; a partir daí,
   // um passo que mira ~6 rótulos no total — senão uma série diária de até
   // 30 pontos sobrepõe datas. Os limiares (8 p/ valores, 6 p/ datas) e o
@@ -651,11 +710,11 @@ function Line({ points, raw, goal, unit, color = C.ink, band, showValues = true 
           <text x={W - 2} y={y(goal) - 4} textAnchor="end" fontSize="10" fill={C.mute}>meta {goal}</text>
         </>
       )}
-      <path d={area} fill={color} opacity="0.1" />
-      {raw && raw.map((v, i) => v == null ? null : (
-        <circle key={"r" + i} cx={x(i)} cy={y(v)} r="1.8" fill={color} opacity="0.32" />
-      ))}
-      <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+      {area && <path d={area} fill={color} opacity="0.1" />}
+      {trendD && (
+        <path d={trendD} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" opacity="0.45" />
+      )}
+      {connect && <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" />}
       {points.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.v)} r="3.2" fill={color} />)}
       {showValues && points.map((p, i) => (i % valueStep === 0 || i === points.length - 1) ? (
         <text key={"t" + i} x={x(i)} y={y(p.v) - 7} textAnchor="middle" fontSize="9" fill={C.mute}>{p.v}{unit || ""}</text>
@@ -868,20 +927,45 @@ export default function App() {
   const today = todayStr();
   const monday = mondayOf(today);
   const todayVitals = state.vitals[today] || { weight: "", restHr: "" };
-  const minutes = weekMinutes(state.workouts, monday);
+  const minutes = weekMinutes(state.workouts, monday, today);
 
+  // Se o resultado final do dia fica sem NENHUM valor útil (weight "" E
+  // restHr ""), a chave é removida em vez de gravar {"",""} — "limpar os
+  // dois campos e salvar" passa a significar "apagar o registro do dia",
+  // coerente com o botão excluir da lista de Registros. Isso também
+  // impede que a limpeza feita por migrateState() seja desfeita na
+  // próxima gravação (ponto único de escrita usado por VitalsTodayCard e
+  // pelo caminho não-movimentação do VitalsModal).
   function setVitalVal(date, patch) {
-    update({ ...state, vitals: { ...state.vitals, [date]: { ...(state.vitals[date] || {}), ...patch } } });
+    const merged = { ...(state.vitals[date] || {}), ...patch };
+    if (!hasVal(merged.weight) && !hasVal(merged.restHr)) {
+      const { [date]: _omit, ...restVitals } = state.vitals;
+      update({ ...state, vitals: restVitals });
+    } else {
+      update({ ...state, vitals: { ...state.vitals, [date]: merged } });
+    }
   }
+  // Mesmo princípio de setVitalVal, aplicado a alimentação: um dia com
+  // todas as porções zeradas não carrega nenhuma informação (0 já é o
+  // valor implícito de um dia sem registro) — em vez de deixar esse objeto
+  // "invisível" (some da lista de Registros, que filtra por `> 0`, mas
+  // continua ocupando uma chave em state.days), removemos a chave.
   function setFoodDay(date, key, val) {
     const d = state.days[date] || { fish: 0, nuts: 0, oats: 0, olive: 0, avocado: 0 };
-    update({ ...state, days: { ...state.days, [date]: { ...d, [key]: val } } });
+    const merged = { ...d, [key]: val };
+    const allZero = FOODS.every((f) => Number(merged[f.key] || 0) === 0);
+    if (allZero) {
+      const { [date]: _omit, ...restDays } = state.days;
+      update({ ...state, days: restDays });
+    } else {
+      update({ ...state, days: { ...state.days, [date]: merged } });
+    }
   }
 
   /* ═══ Estatísticas compartilhadas ═══ */
 
   const weeks12 = lastNWeeks(12);
-  const minsSeries = weeks12.map((m) => weekMinutes(state.workouts, m));
+  const minsSeries = weeks12.map((m) => weekMinutes(state.workouts, m, today));
   const wLabels = weeks12.map((m) => weekLabel(m).split("–")[0].trim());
   const maSeries = minsSeries.map((_, i) => (i < 3 ? null : Math.round(mean(minsSeries.slice(i - 3, i + 1)))));
 
@@ -903,8 +987,8 @@ export default function App() {
   const monthWk = state.workouts.filter((w) => w.date.startsWith(curMonth));
   const totalMonth = monthWk.reduce((s, w) => s + Number(w.minutes), 0);
 
-  const restVals = weeks12.map((m) => weekVitalsAvg(state.vitals, m, "restHr"));
-  const wtVals = weeks12.map((m) => weekVitalsAvg(state.vitals, m, "weight"));
+  const restVals = weeks12.map((m) => weekVitalsAvg(state.vitals, m, "restHr", today));
+  const wtVals = weeks12.map((m) => weekVitalsAvg(state.vitals, m, "weight", today));
   function delta(vals) {
     const recent = vals.slice(-4).filter((v) => v != null);
     const prev = vals.slice(-8, -4).filter((v) => v != null);
@@ -922,12 +1006,11 @@ export default function App() {
   const restDaily = dailyVitalsSeries(state.vitals, "restHr", today);
   const weightDailyMA = movingAvg(weightDaily);
   const restDailyMA = movingAvg(restDaily);
-  // Pontos da linha protagonista (a média móvel) e série de apoio (valor
-  // bruto do dia) alinhados pelo mesmo índice — ver comentário do `Line`.
-  const weightMAPts = weightDaily.map((p, i) => ({ l: fmtShort(p.date), v: Math.round(weightDailyMA[i] * 10) / 10 }));
-  const weightRaw = weightDaily.map((p) => p.v);
-  const restMAPts = restDaily.map((p, i) => ({ l: fmtShort(p.date), v: Math.round(restDailyMA[i]) }));
-  const restRaw = restDaily.map((p) => p.v);
+  // Pontos = os REGISTROS REAIS (o que o usuário digitou) — ganham círculo e
+  // rótulo de valor no gráfico. A média móvel vira só `trend` (linha de
+  // tendência sem círculo próprio) — ver comentário do `Line`.
+  const weightPts = weightDaily.map((p) => ({ l: fmtShort(p.date), v: p.v }));
+  const restPts = restDaily.map((p) => ({ l: fmtShort(p.date), v: p.v }));
 
   const hrSeries = weeks12.map((m, i) => {
     const end = addDays(m, 6);
@@ -937,7 +1020,7 @@ export default function App() {
 
   const weeks4 = lastNWeeks(4);
   const foodAdesao = FOODS.map((f) => {
-    const totals = weeks4.map((m) => foodWeekTotal(state.days, m, f.key));
+    const totals = weeks4.map((m) => foodWeekTotal(state.days, m, f.key, today));
     const avg = mean(totals) || 0;
     const goal = Number(state.goals[f.key]);
     return { ...f, avg, pct: goal > 0 ? Math.min(100, Math.round((avg / goal) * 100)) : 0 };
@@ -1073,9 +1156,15 @@ export default function App() {
         )}
       </Card>
 
-      <Card cat="heart" title="FC de repouso · diário" right="média móvel · 7 registros">
+      <Card cat="heart" title="FC de repouso · diário"
+        right={`${restDaily.length} registro${restDaily.length === 1 ? "" : "s"} · 30 dias`}>
         {restDaily.length >= 2 ? (
-          <Line points={restMAPts} raw={restRaw} color={C.heart} showValues={false} />
+          <>
+            <Line points={restPts} trend={restDailyMA} color={C.heart} connect={false} showValues={restDaily.length <= 8} />
+            <div style={{ fontSize: 11, color: C.mute, textAlign: "center", marginTop: 2 }}>
+              linha fina = tendência (média dos últimos registros)
+            </div>
+          </>
         ) : restDaily.length === 1 ? (
           <div>
             <div style={{ textAlign: "center", padding: "8px 0 2px" }}>
@@ -1089,9 +1178,15 @@ export default function App() {
         )}
       </Card>
 
-      <Card cat="body" title="Peso · diário" right="média móvel · 7 registros">
+      <Card cat="body" title="Peso · diário"
+        right={`${weightDaily.length} registro${weightDaily.length === 1 ? "" : "s"} · 30 dias`}>
         {weightDaily.length >= 2 ? (
-          <Line points={weightMAPts} raw={weightRaw} goal={Number(state.goals.weightGoal) || null} color={C.body} showValues={false} />
+          <>
+            <Line points={weightPts} trend={weightDailyMA} goal={Number(state.goals.weightGoal) || null} color={C.body} connect={false} showValues={weightDaily.length <= 8} />
+            <div style={{ fontSize: 11, color: C.mute, textAlign: "center", marginTop: 2 }}>
+              linha fina = tendência (média dos últimos registros)
+            </div>
+          </>
         ) : weightDaily.length === 1 ? (
           <div>
             <div style={{ textAlign: "center", padding: "8px 0 2px" }}>
@@ -1408,7 +1503,15 @@ export default function App() {
             if (destHasData && !confirm(`Já existe registro em ${fmtBR(date)}. Substituir?`)) return;
             const nextVitals = { ...state.vitals };
             delete nextVitals[originalDate];
-            nextVitals[date] = { weight: weightToSave, restHr: f.restHr };
+            // Se os dois campos ficaram vazios (origem tinha dado, usuário
+            // limpou tudo antes de mudar a data), não recriar a chave no
+            // destino — mesma regra de setVitalVal: campos vazios = apagar,
+            // nunca gravar {"",""}.
+            if (!hasVal(weightToSave) && !hasVal(f.restHr)) {
+              delete nextVitals[date];
+            } else {
+              nextVitals[date] = { weight: weightToSave, restHr: f.restHr };
+            }
             update({ ...state, vitals: nextVitals });
           } else {
             setVitalVal(date, { weight: weightToSave, restHr: f.restHr });
