@@ -22,8 +22,8 @@ existe em um único navegador. É perdido se o usuário:
 
 | Etapa | Esforço | Ganho |
 |---|---|---|
-| Lembrete de backup automático (aviso mensal para exportar o JSON) | baixo | evita a perda silenciosa |
-| Migrar de `localStorage` para IndexedDB + API de persistência (`navigator.storage.persist()`) | baixo | o navegador para de apagar os dados sozinho |
+| ✅ Lembrete de backup automático (banner na Home após 30 dias sem exportar) — concluído em 21/07/2026 | baixo | evita a perda silenciosa |
+| ✅ Migrar de `localStorage` para IndexedDB + `navigator.storage.persist()`, com fallback automático — concluído em 21/07/2026 | baixo | o navegador para de apagar os dados sozinho |
 | Sincronização em nuvem (Supabase/Firebase, login simples) | alto | multi-dispositivo, backup contínuo |
 
 São dados de saúde: se houver sincronização em nuvem, documentar claramente
