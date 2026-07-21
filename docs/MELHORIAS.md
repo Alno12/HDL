@@ -22,8 +22,8 @@ existe em um único navegador. É perdido se o usuário:
 
 | Etapa | Esforço | Ganho |
 |---|---|---|
-| Lembrete de backup automático (aviso mensal para exportar o JSON) | baixo | evita a perda silenciosa |
-| Migrar de `localStorage` para IndexedDB + API de persistência (`navigator.storage.persist()`) | baixo | o navegador para de apagar os dados sozinho |
+| ✅ Lembrete de backup automático (banner na Home após 30 dias sem exportar) — concluído em 21/07/2026 | baixo | evita a perda silenciosa |
+| ✅ Migrar de `localStorage` para IndexedDB + `navigator.storage.persist()`, com fallback automático — concluído em 21/07/2026 | baixo | o navegador para de apagar os dados sozinho |
 | Sincronização em nuvem (Supabase/Firebase, login simples) | alto | multi-dispositivo, backup contínuo |
 
 São dados de saúde: se houver sincronização em nuvem, documentar claramente
@@ -68,17 +68,14 @@ errada polui os gráficos e as médias por semanas.
 
 ## 🟠 Prioridade média — muda a experiência de uso diário
 
-### 4. Transformar em PWA instalável e offline
+### 4. ✅ Transformar em PWA instalável e offline (concluído em 21/07/2026)
 
-O app é de uso diário no celular, mas hoje é só uma página web: sem ícone na
-tela inicial, sem funcionar offline garantido, e as fontes vêm do Google
-Fonts (rede). Falta pouco:
-
-- `manifest.json` com ícone e cores (o `theme-color` já existe no HTML);
-- service worker (plugin `vite-plugin-pwa` resolve com pouca configuração);
-- servir as fontes Sora e IBM Plex Sans localmente (hoje um `@import` de CDN dentro de `<style>`).
-
-Com isso o app abre instantaneamente, funciona no avião e ganha cara de app de verdade.
+`vite-plugin-pwa` gera manifest + service worker no build; ícones (192,
+512, 512 maskable, apple-touch-icon, favicon) e meta tags Apple para
+"Adicionar à Tela de Início" no Safari/iOS. Precache cobre o app shell —
+suficiente porque o app não faz chamadas de rede/API (tudo é local). As
+fontes já eram só a stack de sistema (sem CDN) desde o redesign anterior,
+então esse ponto do plano original já não se aplicava.
 
 ### 5. Lembretes diários
 

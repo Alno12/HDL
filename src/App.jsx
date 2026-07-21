@@ -56,6 +56,11 @@ function CatIcon({ kind, size = 18 }) {
 }
 
 const KEY = "hdl-app-state-v3";
+// Chave SEPARADA do estado do app — só guarda metadados do lembrete de
+// backup (última exportação, último "depois"). Não é dado de saúde, não
+// passa por migrateState e não faz parte do shape { goals, workouts,
+// exams, days, vitals }.
+const BACKUP_META_KEY = "hdl-backup-meta-v1";
 const LETTERS = ["S", "T", "Q", "Q", "S", "S", "D"];
 
 const FOODS = [
@@ -88,6 +93,13 @@ function addDays(dateStr, n) {
   const d = new Date(dateStr + "T12:00:00");
   d.setDate(d.getDate() + n);
   return ymdLocal(d);
+}
+// Diferença em dias entre duas datas "YYYY-MM-DD" (b − a). Mesma âncora de
+// meio-dia local das outras funções de data, para não sofrer com DST.
+function daysBetween(aStr, bStr) {
+  const a = new Date(aStr + "T12:00:00");
+  const b = new Date(bStr + "T12:00:00");
+  return Math.round((b - a) / 86400000);
 }
 const MESES = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
 function weekLabel(monday) {
@@ -195,7 +207,48 @@ function demoState() {
 }
 
 /* ─────────────────────────  Persistência  ──────────────────────── */
-/* Usa localStorage do navegador — os dados ficam só no seu dispositivo. */
+/* Backend primário: IndexedDB (mais resistente à limpeza automática do
+   Safari/iOS em localStorage). Se IndexedDB estiver indisponível (modo
+   privado, navegador antigo), cai para localStorage — mesmo comportamento
+   de sempre. Na primeira carga após esta mudança, se o IndexedDB ainda
+   está vazio mas existe algo em localStorage[KEY] (usuário já existente),
+   esse conteúdo é migrado (passando por migrateState) e o localStorage
+   original é preservado como rede de segurança silenciosa (nunca apagado). */
+
+const IDB_NAME = "hdl-app-db";
+const IDB_STORE = "state";
+const IDB_MAIN_KEY = "main";
+
+let idbOpenPromise = null;
+function openIDB() {
+  if (idbOpenPromise) return idbOpenPromise;
+  idbOpenPromise = new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") { reject(new Error("indexedDB indisponível")); return; }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return idbOpenPromise;
+}
+function idbGet(db, key) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const req = tx.objectStore(IDB_STORE).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+function idbSet(db, key, value) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
 
 function migrateState(s) {
   if (!s) return s;
@@ -243,17 +296,57 @@ function migrateState(s) {
   // personalizadas pelo usuário.
   return { ...out, goals: { ...defaultGoals, ...out.goals } };
 }
+// Retorna { state, backend }. `backend` é "indexeddb" ou "localstorage" —
+// decidido nesta carga e usado por saveState() depois, para não misturar
+// backend entre leitura e escrita na mesma sessão.
 async function loadState() {
   try {
+    const db = await openIDB();
+    const raw = await idbGet(db, IDB_MAIN_KEY);
+    if (raw != null) return { state: migrateState(raw), backend: "indexeddb" };
+    // IndexedDB vazio: migração única a partir do localStorage, se existir
+    // (usuário que já usava o app antes desta versão).
+    let lsRaw = null;
+    try { lsRaw = localStorage.getItem(KEY); } catch (e) { /* localStorage indisponível */ }
+    if (lsRaw) {
+      const migrated = migrateState(JSON.parse(lsRaw));
+      try {
+        await idbSet(db, IDB_MAIN_KEY, migrated);
+        return { state: migrated, backend: "indexeddb" };
+      } catch (e) {
+        // A ESCRITA da migração falhou (quota, modo privado do WebKit que
+        // abre o IDB mas aborta transações). Nunca devolver state:null
+        // aqui — isso faria o app cair em demoState() por cima dos dados
+        // reais do usuário. Devolve o estado migrado via localStorage;
+        // saveState() (abaixo) mantém essa cópia sempre atualizada daqui
+        // pra frente, então o próximo load não regride a um snapshot velho.
+        try { localStorage.setItem(KEY, JSON.stringify(migrated)); } catch (e2) { /* ignora */ }
+        return { state: migrated, backend: "localstorage" };
+      }
+    }
+    return { state: null, backend: "indexeddb" };
+  } catch (e) { /* IndexedDB indisponível (modo privado, navegador antigo, etc.) */ }
+  // Fallback: localStorage, mesmo comportamento de sempre.
+  try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return migrateState(JSON.parse(raw));
+    if (raw) return { state: migrateState(JSON.parse(raw)), backend: "localstorage" };
   } catch (e) { /* sem dados salvos */ }
-  return null;
+  return { state: null, backend: "localstorage" };
 }
-async function saveState(s) {
+async function saveState(s, backend) {
+  // localStorage é sempre mantido como rede de segurança VIVA (atualizada
+  // a cada gravação, não só congelada no dia da migração) — se o
+  // IndexedDB for despejado pelo sistema ou falhar numa gravação, o
+  // próximo load encontra o dado mais recente, não um snapshot antigo.
   try {
     localStorage.setItem(KEY, JSON.stringify(s));
   } catch (e) { /* armazenamento indisponível (modo privado, etc.) */ }
+  if (backend === "indexeddb") {
+    try {
+      const db = await openIDB();
+      await idbSet(db, IDB_MAIN_KEY, s);
+    } catch (e) { /* IndexedDB falhou nesta gravação — localStorage acima já está atualizado */ }
+  }
 }
 
 /* ─────────────────────────  Cálculos  ──────────────────────────── */
@@ -363,6 +456,35 @@ function download(name, text, mime) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/* ────────────────  Lembrete de backup (metadados)  ──────────────── */
+
+function loadBackupMeta() {
+  try {
+    const raw = localStorage.getItem(BACKUP_META_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* sem metadados salvos ainda */ }
+  return { lastExportAt: null, lastDismissedAt: null };
+}
+function saveBackupMeta(meta) {
+  try { localStorage.setItem(BACKUP_META_KEY, JSON.stringify(meta)); } catch (e) { /* ignora */ }
+}
+// Ponto único de exportação do backup JSON — usado tanto pelo botão do
+// modal de Configurações quanto pelo banner da Home, para as duas
+// atualizarem os mesmos metadados de "último export".
+function exportBackupJSON(state) {
+  download("hdl-backup.json", JSON.stringify(state, null, 2), "application/json");
+  const next = { ...loadBackupMeta(), lastExportAt: todayStr() };
+  saveBackupMeta(next);
+  return next;
+}
+// Texto informativo (só leitura) mostrado em Configurações — critério de
+// aceitação observável de qual backend de armazenamento está em uso.
+function storageLabel(info) {
+  if (info.backend === "indexeddb") return `Armazenamento: IndexedDB (${info.persisted ? "persistente" : "não persistente"})`;
+  if (info.backend === "localstorage") return "Armazenamento: localStorage (modo compatibilidade)";
+  return "Armazenamento: verificando…";
 }
 
 /* ─────────────────────────  Validação  ──────────────────────────── */
@@ -821,13 +943,35 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [modal, setModal] = useState(null); // {kind, ...payload}
   const saveTimer = useRef(null);
+  // Backend decidido na carga (indexeddb ou localstorage) — vive em ref,
+  // não em state, porque não deve mudar durante a sessão e é lido de
+  // dentro do debounce de saveState, não de um render.
+  const backendRef = useRef("localstorage");
+  // Só para exibir no modal de Configurações ("Armazenamento: ..."); não
+  // afeta leitura/escrita (isso é o backendRef acima).
+  const [storageInfo, setStorageInfo] = useState({ backend: null, persisted: null });
+  const [backupMeta, setBackupMeta] = useState(() => loadBackupMeta());
 
-  useEffect(() => { loadState().then((s) => setState(s || demoState())); }, []);
+  useEffect(() => {
+    loadState().then(({ state: s, backend }) => {
+      backendRef.current = backend;
+      setState(s || demoState());
+      setStorageInfo({ backend, persisted: null });
+      // Best-effort: pede ao navegador para não limpar o armazenamento
+      // sozinho. Sem alert em caso de recusa/indisponibilidade — é só uma
+      // tentativa a mais, não um requisito para o app funcionar.
+      if (navigator.storage?.persist) {
+        navigator.storage.persist()
+          .then((granted) => setStorageInfo((info) => ({ ...info, persisted: granted })))
+          .catch(() => {});
+      }
+    });
+  }, []);
 
   function update(next) {
     setState(next);
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => saveState(next), 300);
+    saveTimer.current = setTimeout(() => saveState(next, backendRef.current), 300);
   }
 
   /* Insights de Registros — tudo derivado de workouts/days/vitals,
@@ -928,6 +1072,20 @@ export default function App() {
   const monday = mondayOf(today);
   const todayVitals = state.vitals[today] || { weight: "", restHr: "" };
   const minutes = weekMinutes(state.workouts, monday, today);
+
+  // Banner de lembrete de backup: aparece se nunca exportou OU faz mais de
+  // 30 dias desde o último export — E faz mais de 7 dias desde o último
+  // "Depois" (para não insistir a cada abertura do app já dispensado).
+  const daysSinceExport = backupMeta.lastExportAt ? daysBetween(backupMeta.lastExportAt, today) : null;
+  const daysSinceDismiss = backupMeta.lastDismissedAt ? daysBetween(backupMeta.lastDismissedAt, today) : null;
+  const showBackupBanner = (daysSinceExport == null || daysSinceExport > 30)
+    && (daysSinceDismiss == null || daysSinceDismiss > 7);
+  function exportBackupFromHome() { setBackupMeta(exportBackupJSON(state)); }
+  function dismissBackupBanner() {
+    const next = { ...backupMeta, lastDismissedAt: today };
+    saveBackupMeta(next);
+    setBackupMeta(next);
+  }
 
   // Se o resultado final do dia fica sem NENHUM valor útil (weight "" E
   // restHr ""), a chave é removida em vez de gravar {"",""} — "limpar os
@@ -1040,6 +1198,25 @@ export default function App() {
 
   const Home = (
     <>
+      {showBackupBanner && (
+        <Card>
+          <div style={{ fontSize: 14, color: C.ink, lineHeight: 1.4, marginBottom: 12 }}>
+            {daysSinceExport == null
+              ? "Você ainda não fez um backup dos seus dados. Eles ficam só neste aparelho."
+              : `Faz ${daysSinceExport} dias que você não exporta um backup dos seus dados. Eles ficam só neste aparelho.`}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ flex: 1 }}>
+              <PrimaryBtn tone={C.blue} onClick={exportBackupFromHome}>Exportar agora</PrimaryBtn>
+            </div>
+            <button onClick={dismissBackupBanner}
+              style={{ border: "none", background: "transparent", color: C.mute, fontSize: 15, fontWeight: 600, padding: "0 10px", minHeight: 44, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+              Depois
+            </button>
+          </div>
+        </Card>
+      )}
+
       <Card cat="activity" title="Atividade" right={weekLabel(monday)}>
         <ZoneBar minutes={minutes} goal={state.goals.minWeek} />
         <WeekStrip workouts={state.workouts} monday={monday} />
@@ -1581,7 +1758,7 @@ export default function App() {
     const [g, setG] = useState({ ...state.goals });
     const fileRef = useRef(null);
 
-    function exportJSON() { download("hdl-backup.json", JSON.stringify(state, null, 2), "application/json"); }
+    function exportJSON() { setBackupMeta(exportBackupJSON(state)); }
     function exportCSV() {
       const t = ["data,minutos,tipo,fc_media", ...state.workouts.map((w) => `${w.date},${w.minutes},${w.type},${w.avgHr || ""}`)].join("\n");
       const e = ["data,ct,hdl,tg,ldl,apob,lpa,nota", ...state.exams.map((x) => `${x.date},${x.ct},${x.hdl},${x.tg},${ldlOf(x.ct, x.hdl, x.tg) ?? ""},${hasVal(x.apoB) ? x.apoB : ""},${hasVal(x.lpa) ? x.lpa : ""},"${x.note || ""}"`)].join("\n");
@@ -1673,6 +1850,9 @@ export default function App() {
             style={{ ...inputStyle, cursor: "pointer", textAlign: "center", color: C.danger, fontWeight: 500 }}>
             Zerar dados (começar meu uso real)
           </button>
+        </div>
+        <div style={{ fontSize: 12, color: C.mute, textAlign: "center", marginTop: 10 }}>
+          {storageLabel(storageInfo)}
         </div>
       </Modal>
     );
